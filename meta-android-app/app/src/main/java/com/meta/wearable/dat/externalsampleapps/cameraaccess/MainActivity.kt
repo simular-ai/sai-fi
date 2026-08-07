@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
               modifier = Modifier.fillMaxSize().padding(24.dp),
               verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
           ) {
-            Text("sai-fi", style = MaterialTheme.typography.titleLarge)
+            Text("Sai-Fi", style = MaterialTheme.typography.titleLarge)
             Text(
                 "Glasses connected. Return to Sai to start a voice call.",
                 style = MaterialTheme.typography.bodyMedium,

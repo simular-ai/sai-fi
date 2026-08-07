@@ -36,7 +36,7 @@
         android:name=".saispike.SaiFiApp"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
-        android:label="sai-fi"
+        android:label="Sai-Fi"
         android:supportsRtl="true"
         android:theme="@style/Theme.CameraAccess">
 
