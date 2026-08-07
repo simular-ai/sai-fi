@@ -39,7 +39,12 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.Concier
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.theme.SaiTheme
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** How long [VoiceConciergeActivity.glassesLinkedNow] waits for the DAT flows before giving up. */
+private const val LINK_PROBE_TIMEOUT_MS = 1_500L
 
 class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
   // Machine picker (like `sai machine`): fetched from GET /v1/agents/machines, selected in a dropdown.
@@ -57,6 +62,8 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
   override var glassesLinked by mutableStateOf(false)
   // Glasses-camera DAT permission (device-level, via Meta AI). Shown as an action only when missing.
   override var glassesCameraGranted by mutableStateOf(false)
+  // Our own "why we want location" dialog, shown once at sign-in, immediately before the system sheet.
+  override var locationRationaleOpen by mutableStateOf(false)
   // Request the glasses camera permission automatically once per process, right after registration.
   private var cameraPermRequested = false
 
@@ -273,14 +280,44 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
   /**
    * DAT camera permission via Meta AI. Requires a linked (powered-on) device — otherwise Meta AI still
    * opens and the user gets stuck in a flow that can't succeed.
+   *
+   * The link is read **live** here rather than trusted from [glassesLinked]. That field is fed by the
+   * devices collector in [onCreate], which on a first install has usually not emitted by the time the
+   * user finishes registering — so a stale `false` was refusing the grant on exactly the run that
+   * needs it, and the button that would have retried was disabled by the same flag. Checking the SDK
+   * directly settles it; the guard itself is worth keeping, so a genuinely powered-off pair still gets
+   * an explanation instead of a Meta AI flow that cannot complete.
    */
   override fun requestGlassesCamera() {
-    if (!glassesLinked) {
-      showGlassesError("Turn the glasses on and wait until they're linked, then grant camera")
-      return
-    }
     clearGlassesError()
-    datCameraPermission.launch(Permission.CAMERA)
+    lifecycleScope.launch {
+      if (!glassesLinked && !glassesLinkedNow()) {
+        showGlassesError("Turn the glasses on and wait until they're linked, then grant camera")
+        return@launch
+      }
+      datCameraPermission.launch(Permission.CAMERA)
+    }
+  }
+
+  /**
+   * One bounded read of "is a device connected right now", independent of the collected flag.
+   *
+   * Bounded because these flows need not emit at all when nothing is attached — an unguarded
+   * `first()` would hang the grant instead of refusing it.
+   */
+  private suspend fun glassesLinkedNow(): Boolean {
+    val linked =
+        withTimeoutOrNull(LINK_PROBE_TIMEOUT_MS) {
+          val ids = Wearables.devices.first()
+          if (ids.isEmpty()) return@withTimeoutOrNull false
+          val flows = ids.mapNotNull { Wearables.devicesMetadata[it] }
+          if (flows.isEmpty()) return@withTimeoutOrNull false
+          combine(flows) { devices -> devices.any { it.linkState == LinkState.CONNECTED } }.first()
+        } ?: false
+    // Keep the rest of the screen honest: if the probe found a link the collector had not reported
+    // yet, "Link: disconnected" is now a lie.
+    if (linked) glassesLinked = true
+    return linked
   }
 
   private fun maybeAutoRequestGlassesCamera() {
@@ -334,11 +371,29 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
    *
    * The prompt is spent whatever the answer, so a decline is respected rather than re-litigated on
    * the next launch. Already-granted short-circuits so a reinstall-then-grant doesn't re-ask.
+   *
+   * What is shown first is our own rationale, not the system sheet. Android does not let an app put a
+   * word of its own into the platform permission dialog — that text is fixed — so the only place the
+   * reason can be given is a screen of ours immediately before it. Without one, the first thing a new
+   * user sees after signing in is a bare "Allow Sai-Fi to access this device's location?" with no
+   * stated purpose, which is the version most people decline.
    */
   private fun maybeAutoRequestLocation() {
     if (Prefs.locationAutoPrompted(this)) return
     Prefs.setLocationAutoPrompted(this, true)
     if (PhoneLocation.hasPermission(this)) return
+    locationRationaleOpen = true
+  }
+
+  /**
+   * Answer to the rationale above. [proceed] hands off to the system sheet; declining stops here.
+   *
+   * Either way the one-shot is already spent (set when the rationale opened), matching the previous
+   * behaviour of the bare system prompt — this adds an explanation, not a second ask.
+   */
+  override fun onLocationRationale(proceed: Boolean) {
+    locationRationaleOpen = false
+    if (!proceed) return
     locationPermission.launch(
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
     )

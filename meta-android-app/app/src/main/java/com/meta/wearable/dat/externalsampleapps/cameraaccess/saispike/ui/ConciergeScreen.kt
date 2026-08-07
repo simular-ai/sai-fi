@@ -126,6 +126,8 @@ fun ConciergeScreen(ui: ConciergeUi) {
     }
   }
 
+  LocationRationaleDialog(ui)
+
   Surface(modifier = Modifier.fillMaxSize()) {
     Column(
         // safeDrawing covers the status bar AND the gesture/navigation bar at the bottom. The top
@@ -143,7 +145,7 @@ fun ConciergeScreen(ui: ConciergeUi) {
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalAlignment = Alignment.CenterVertically,
       ) {
-        Text("sai-fi", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        Text("Sai-Fi", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
         CallStatusChip(
             active = s.active,
             reconnecting = s.reconnecting,
@@ -321,11 +323,12 @@ fun ConciergeScreen(ui: ConciergeUi) {
           if (ui.glassesReg != RegistrationState.REGISTERED) {
             OutlinedButton(onClick = { ui.registerGlasses() }, border = saiEdge()) { Text("Register glasses") }
           } else if (!ui.glassesCameraGranted) {
-            OutlinedButton(
-                border = saiEdge(),
-                enabled = ui.glassesLinked,
-                onClick = { ui.requestGlassesCamera() },
-            ) {
+            // Never disabled on `glassesLinked`. It used to be, and that was the bug: straight after
+            // registration the DAT devices flow has often not emitted yet, so the one control that
+            // grants the camera was dead while Start was live — no way to grant at all, and nothing
+            // on screen to explain why. `requestGlassesCamera` re-checks the link for real and says
+            // so if the glasses are genuinely off, which is feedback a disabled button cannot give.
+            OutlinedButton(border = saiEdge(), onClick = { ui.requestGlassesCamera() }) {
               Text("Grant glasses camera")
             }
           }
@@ -349,18 +352,32 @@ fun ConciergeScreen(ui: ConciergeUi) {
           ) {
             Text("Start call")
           }
-          if (ui.signedIn && ui.machinesFetchOk && ui.selectedMachine != null && !ui.glassesLinked) {
+          if (ui.signedIn && ui.machinesFetchOk && ui.selectedMachine != null) {
             // One line, detail on demand. This was a four-sentence paragraph — the single biggest
             // contributor to the wall-of-grey-text look, and it sat directly under the button you
             // were trying to read.
-            Hint(
-                "Glasses aren't linked — the call runs on phone audio.",
-                detail =
-                    "The call will run on phone/Bluetooth audio, but the temple button and photo " +
-                        "capture won't work until the glasses are on, unfolded, in range, and " +
-                        "registered. A \"no eligible device\" error means the glasses aren't paired " +
-                        "for this app yet.",
-            )
+            //
+            // Two different degraded starts, and only the first used to be called out. A linked pair
+            // with no camera grant looks completely healthy here, right up until "take a photo"
+            // fails mid-call with nothing on this screen having warned you.
+            if (!ui.glassesLinked) {
+              Hint(
+                  "Glasses aren't linked — the call runs on phone audio.",
+                  detail =
+                      "The call will run on phone/Bluetooth audio, but the temple button and photo " +
+                          "capture won't work until the glasses are on, unfolded, in range, and " +
+                          "registered. A \"no eligible device\" error means the glasses aren't paired " +
+                          "for this app yet.",
+              )
+            } else if (!ui.glassesCameraGranted) {
+              Hint(
+                  "Camera isn't granted — Sai can't see or take photos on this call.",
+                  detail =
+                      "Audio and the temple button work. Anything that needs the glasses camera — " +
+                          "\"take a photo\", or a question about what you're looking at — will fail " +
+                          "until you use \"Grant glasses camera\" above.",
+              )
+            }
           }
         } else {
           // Two rows of two. Emphasis is carried by fill, not by size: Mute is the one control you
@@ -665,6 +682,37 @@ private fun SectionErrorAffordance(
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
   }
+}
+
+/**
+ * Why Sai-Fi wants location, said in our own words just before the system asks.
+ *
+ * Android fixes the wording of the platform permission sheet — an app cannot add a sentence to it. So
+ * this is the only surface where the reason can appear, and it has to come *first*: once the system
+ * sheet is up, an explanation behind it is unreadable and arrives too late to matter.
+ *
+ * Deliberately not dismissible by tapping outside. The two buttons are the whole decision, and an
+ * accidental outside-tap would spend the app's one and only ask (see `maybeAutoRequestLocation`)
+ * without the user having answered anything.
+ */
+@Composable
+private fun LocationRationaleDialog(ui: ConciergeUi) {
+  if (!ui.locationRationaleOpen) return
+  AlertDialog(
+      onDismissRequest = {},
+      title = { Text("Let Sai use your location?") },
+      text = {
+        Text(
+            "Sai-Fi can use your phone's location so questions like \"what's the weather\" or " +
+                "\"what's near me\" just work, without you having to say where you are out loud.\n\n" +
+                "It's read only when a question needs it, never streamed or tracked. Everything else " +
+                "in the app works the same if you say no.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+      },
+      confirmButton = { TextButton(onClick = { ui.onLocationRationale(true) }) { Text("Continue") } },
+      dismissButton = { TextButton(onClick = { ui.onLocationRationale(false) }) { Text("Not now") } },
+  )
 }
 
 /**

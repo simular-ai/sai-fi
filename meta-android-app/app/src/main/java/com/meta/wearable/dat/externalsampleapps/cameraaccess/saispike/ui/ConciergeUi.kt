@@ -43,6 +43,13 @@ interface ConciergeUi {
   // ── Settings ───────────────────────────────────────────────────────────────────────────────────
   var askFirstThresholdSec: String
 
+  // ── Location ───────────────────────────────────────────────────────────────────────────────────
+  /**
+   * Our own reason-for-location dialog, shown once at sign-in and immediately before the system
+   * permission sheet. It exists because Android's sheet cannot carry app-supplied text.
+   */
+  val locationRationaleOpen: Boolean
+
   // ── Errors (full text behind a reopenable dialog, never truncated inline) ──────────────────────
   val authError: String?
   var authErrorOpen: Boolean
@@ -61,6 +68,9 @@ interface ConciergeUi {
   fun registerGlasses()
 
   fun requestGlassesCamera()
+
+  /** Answer to [locationRationaleOpen]: true hands off to the system sheet, false stops there. */
+  fun onLocationRationale(proceed: Boolean)
 
   fun onStartClicked()
 }
