@@ -13,6 +13,8 @@ is obliged to answer itself — is documented in
 [`docs/CONCIERGE_CLIENT_PROTOCOL.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/CONCIERGE_CLIENT_PROTOCOL.md)
 in the server repository.
 
+- [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md) — **start here to verify a build on real
+  hardware.** Seven checks, ~15 minutes, each naming what it actually exercises.
 - [`docs/SAI_GLASSES_APP.md`](docs/SAI_GLASSES_APP.md) — this app's architecture: modules, call
   phases, DAT platform facts, dev runbook.
 - [`docs/SAI_GLASSES_DEMO.md`](docs/SAI_GLASSES_DEMO.md) — the live-demo runbook, glasses and
