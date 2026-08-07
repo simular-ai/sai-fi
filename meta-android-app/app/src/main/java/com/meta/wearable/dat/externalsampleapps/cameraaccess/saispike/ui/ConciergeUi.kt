@@ -36,8 +36,17 @@ interface ConciergeUi {
 
   // ── Glasses ────────────────────────────────────────────────────────────────────────────────────
   val glassesReg: RegistrationState?
-  /** DAT reports a device with LinkState.CONNECTED (powered on / in range). */
-  val glassesLinked: Boolean
+  /**
+   * DAT reports a device with LinkState.CONNECTED (powered on / in range), or `null` while we don't
+   * know yet.
+   *
+   * Three states, not two, and the difference matters: the DAT devices flow need not have emitted by
+   * the time this screen first draws (on a fresh install it usually hasn't), and a `false` standing in
+   * for "hasn't answered yet" is what once disabled the camera-grant button on exactly the run that
+   * needed it. Gate destructive/blocking UI on `== false` — an affirmative "no device" — and leave
+   * `null` permissive.
+   */
+  val glassesLinked: Boolean?
   val glassesCameraGranted: Boolean
 
   // ── Settings ───────────────────────────────────────────────────────────────────────────────────

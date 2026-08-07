@@ -302,8 +302,11 @@ fun ConciergeScreen(ui: ConciergeUi) {
       // ── Glasses / call ──────────────────────────────────────────────────────────────────────
       item {
       Section(title = "Glasses") {
+        // Falls back to "phone", not "—": there are only two routes, and glasses require an
+        // affirmatively-present SCO device, so "we haven't computed it yet" and "phone" describe the
+        // same speaker. A dash read as though audio were going nowhere.
         Text(
-            "Audio route: ${s.routeStatus.ifEmpty { "—" }}",
+            "Audio route: ${s.routeStatus.ifEmpty { "phone" }}",
             style = MaterialTheme.typography.bodySmall,
         )
         Row(
@@ -316,26 +319,39 @@ fun ConciergeScreen(ui: ConciergeUi) {
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                "Link: ${if (ui.glassesLinked) "connected" else "disconnected"}",
+                "Link: " +
+                    when (ui.glassesLinked) {
+                      true -> "connected"
+                      false -> "disconnected"
+                      null -> "checking…"
+                    },
                 style = MaterialTheme.typography.bodySmall,
             )
           }
           if (ui.glassesReg != RegistrationState.REGISTERED) {
             OutlinedButton(onClick = { ui.registerGlasses() }, border = saiEdge()) { Text("Register glasses") }
           } else if (!ui.glassesCameraGranted) {
-            // Never disabled on `glassesLinked`. It used to be, and that was the bug: straight after
-            // registration the DAT devices flow has often not emitted yet, so the one control that
-            // grants the camera was dead while Start was live — no way to grant at all, and nothing
-            // on screen to explain why. `requestGlassesCamera` re-checks the link for real and says
-            // so if the glasses are genuinely off, which is feedback a disabled button cannot give.
-            OutlinedButton(border = saiEdge(), onClick = { ui.requestGlassesCamera() }) {
+            // Disabled only on an AFFIRMATIVE "no device" (`== false`), never on the unknown state.
+            // The distinction is the whole point: this button used to be gated on a plain Boolean,
+            // and straight after registration the DAT devices flow has often not emitted yet, so the
+            // one control that grants the camera was dead while Start was live — no way to grant at
+            // all, and nothing on screen to explain why. While the link is still unknown the button
+            // stays live and `requestGlassesCamera` re-probes for real, which is feedback a disabled
+            // button cannot give. Once DAT has actually said "nothing connected", the grant cannot
+            // succeed — Meta AI needs a linked device — so a live button would only lead into a flow
+            // that dead-ends; the line below says why it's greyed.
+            OutlinedButton(
+                border = saiEdge(),
+                enabled = ui.glassesLinked != false,
+                onClick = { ui.requestGlassesCamera() },
+            ) {
               Text("Grant glasses camera")
             }
           }
         }
         if (ui.glassesReg == RegistrationState.REGISTERED &&
             !ui.glassesCameraGranted &&
-            !ui.glassesLinked) {
+            ui.glassesLinked == false) {
           Text(
               "Turn glasses on to grant camera (Meta AI needs a linked device).",
               style = MaterialTheme.typography.bodySmall,
@@ -360,7 +376,7 @@ fun ConciergeScreen(ui: ConciergeUi) {
             // Two different degraded starts, and only the first used to be called out. A linked pair
             // with no camera grant looks completely healthy here, right up until "take a photo"
             // fails mid-call with nothing on this screen having warned you.
-            if (!ui.glassesLinked) {
+            if (ui.glassesLinked != true) {
               Hint(
                   "Glasses aren't linked — the call runs on phone audio.",
                   detail =

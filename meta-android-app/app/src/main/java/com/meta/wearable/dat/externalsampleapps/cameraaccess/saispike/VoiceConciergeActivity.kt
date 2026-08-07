@@ -58,8 +58,10 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
 
   // DAT glasses registration (one-time) — enables the temple button to start/stop the call.
   override var glassesReg by mutableStateOf<RegistrationState?>(null)
-  // True when DAT reports at least one device with LinkState.CONNECTED (powered on / in range).
-  override var glassesLinked by mutableStateOf(false)
+  // True when DAT reports at least one device with LinkState.CONNECTED (powered on / in range);
+  // null until the devices flow has answered either way. See ConciergeUi.glassesLinked for why the
+  // unknown state is kept distinct rather than collapsed into false.
+  override var glassesLinked by mutableStateOf<Boolean?>(null)
   // Glasses-camera DAT permission (device-level, via Meta AI). Shown as an action only when missing.
   override var glassesCameraGranted by mutableStateOf(false)
   // Our own "why we want location" dialog, shown once at sign-in, immediately before the system sheet.
@@ -224,16 +226,16 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
     lifecycleScope.launch {
       Wearables.devices.collectLatest { ids ->
         if (ids.isEmpty()) {
-          glassesLinked = false
+          setGlassesLinked(false)
           return@collectLatest
         }
         val flows = ids.mapNotNull { Wearables.devicesMetadata[it] }
         if (flows.isEmpty()) {
-          glassesLinked = false
+          setGlassesLinked(false)
           return@collectLatest
         }
         combine(flows) { devices -> devices.any { it.linkState == LinkState.CONNECTED } }.collect {
-          glassesLinked = it
+          setGlassesLinked(it)
           maybeAutoRequestGlassesCamera()
         }
       }
@@ -291,7 +293,7 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
   override fun requestGlassesCamera() {
     clearGlassesError()
     lifecycleScope.launch {
-      if (!glassesLinked && !glassesLinkedNow()) {
+      if (glassesLinked != true && !glassesLinkedNow()) {
         showGlassesError("Turn the glasses on and wait until they're linked, then grant camera")
         return@launch
       }
@@ -316,13 +318,28 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
         } ?: false
     // Keep the rest of the screen honest: if the probe found a link the collector had not reported
     // yet, "Link: disconnected" is now a lie.
-    if (linked) glassesLinked = true
+    if (linked) setGlassesLinked(true)
     return linked
+  }
+
+  /**
+   * Record the live DAT link, and keep the audio-route line in step with it.
+   *
+   * The route line is derived from whether a glasses SCO device is present, which changes at exactly
+   * the moments the link does — so without this the header kept whatever it computed at onCreate and
+   * only corrected itself on the next resume.
+   */
+  private fun setGlassesLinked(linked: Boolean) {
+    val changed = glassesLinked != linked
+    glassesLinked = linked
+    // During a call the service owns this line (it reports the real selected device, incl. mid-call
+    // SCO loss); recomputing from the activity would stomp a more accurate string with a guess.
+    if (changed && !CallController.state.value.active) refreshRouteStatus()
   }
 
   private fun maybeAutoRequestGlassesCamera() {
     if (cameraPermRequested) return
-    if (glassesReg != RegistrationState.REGISTERED || !glassesLinked) return
+    if (glassesReg != RegistrationState.REGISTERED || glassesLinked != true) return
     // Don't bounce into Meta AI on every cold start — once was enough; button remains for retries.
     if (Prefs.glassesCameraAutoPrompted(this)) return
     cameraPermRequested = true
@@ -334,7 +351,7 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
         Prefs.setGlassesCameraAutoPrompted(this@VoiceConciergeActivity, true)
         return@launch
       }
-      if (!glassesLinked) {
+      if (glassesLinked != true) {
         cameraPermRequested = false // allow retry when link comes back
         return@launch
       }

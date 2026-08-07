@@ -254,6 +254,9 @@ object CallController {
   internal fun clear() {
     liveEntryId = null
     nextId.set(0)
-    update { State() }
+    // Everything per-call resets; the audio route does NOT. It describes the phone's audio hardware,
+    // which outlives any one call, and the activity only recomputes it on resume — so wiping it here
+    // blanked the header ("Audio route: —") from call start until AudioIo's first device callback.
+    update { State(routeStatus = it.routeStatus) }
   }
 }
