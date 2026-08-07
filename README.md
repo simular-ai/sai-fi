@@ -108,5 +108,9 @@ This app is derived from Meta's public **CameraAccess** Device Access Toolkit sa
 configuration and the manifest still carry Meta's copyright headers; the concierge implementation
 under `meta-android-app/app/src/main/java/.../saispike/` is Simular's.
 
-Released under the MIT licence — see [`LICENSE`](LICENSE). Meta's sample is also MIT, so the two are
-compatible.
+Released under the MIT licence — see [`LICENSE`](LICENSE), which carries both copyright lines. Meta's
+sample is also MIT, so the two are compatible.
+
+The two bundled fonts are **not** MIT: JetBrains Mono and Manrope are SIL OFL 1.1, which requires the
+licence to travel with the font — including inside the APK. Their texts are in
+[`licenses/`](licenses/README.md). Do not rename the font files; the OFL reserves the original names.
