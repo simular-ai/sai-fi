@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark-mode window theme. See values/themes.xml for why this exists. -->
+<resources>
+
+    <style name="Theme.CameraAccess" parent="android:Theme.Material.NoActionBar">
+        <!-- background token, dark -->
+        <item name="android:colorBackground">@color/sai_window_background</item>
+        <item name="android:windowBackground">@color/sai_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

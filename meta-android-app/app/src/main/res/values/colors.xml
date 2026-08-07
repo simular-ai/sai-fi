@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sampled from the Sai app icon artwork itself, so the adaptive-icon background matches the
+         PNG's green exactly and the crop seam is invisible. Same value as the logo-bg / success
+         tokens in the desktop app's base.css. -->
+    <color name="ic_launcher_background">#16D342</color>
+
+    <!-- Cold-start window background only — Compose takes over a frame later. The `background` token
+         (light) from base.css; mirrors Light.background in ui/theme/Color.kt. values-night/ has dark. -->
+    <color name="sai_window_background">#F9FAF5</color>
+</resources>

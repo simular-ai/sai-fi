@@ -1,0 +1,64 @@
+# local.properties — copy to `local.properties` and fill in. NEVER commit the filled-in file.
+#
+# Every key below is read by build.gradle.kts or settings.gradle.kts, and until this file existed the
+# only way to discover them was to read those two files. A missing key does not fail the build: it
+# becomes an empty BuildConfig field, and the app fails later at runtime in a way that looks like a
+# bug. So fill in everything down to "Optional".
+
+# ── Required to BUILD ────────────────────────────────────────────────────────────────────────────
+
+# GitHub personal access token (classic) with `read:packages`. settings.gradle.kts resolves Meta's
+# Device Access Toolkit from GitHub Packages, and the DAT modules are on the unit-test compile
+# classpath — so without this even `:app:testDebugUnitTest` cannot run.
+github_token=ghp_xxxxxxxxxxxxxxxxxxxx
+
+# Android SDK location. Android Studio writes this for you on first open.
+sdk.dir=/Users/you/Library/Android/sdk
+
+# ── Required to RUN: Meta AI registration ────────────────────────────────────────────────────────
+
+# From the Wearables Developer Center. These are injected as manifestPlaceholders, NOT committed —
+# the client token is a credential. Empty builds fine; Meta AI just won't grant a device session.
+#
+# Only ONE third-party DAT app can be registered at a time on a given account: registering this one
+# unregisters whatever else you had.
+mwdat_application_id=
+mwdat_client_token=
+
+# ── Required to RUN: the concierge backend ───────────────────────────────────────────────────────
+
+# cloud-api base. The shared staging gateway is the default in build.gradle.kts; set this to point
+# somewhere else. The app calls /v1/concierge/session and /v1/concierge/ws over HTTPS/WSS — no
+# `adb reverse` needed.
+concierge_url=https://staging.cloud-api.simular.cloud
+
+# ── Required to RUN: Google sign-in (Firebase ID token) ──────────────────────────────────────────
+
+# There is no google-services.json: the plugin was dropped, and these four values are what replace
+# it. `web_client_id` is the OAuth *web* client id (not the Android one) — Credential Manager needs
+# the web client for a server-verifiable ID token.
+firebase_app_id=
+firebase_api_key=
+firebase_project_id=
+web_client_id=
+
+# ── Optional ─────────────────────────────────────────────────────────────────────────────────────
+
+# Pin the app to one server revision instead of the shared staging default. Sent as the
+# `x-sai-version` header on every cloud-api call; the staging gateway routes to that revision. This
+# is how an on-device check exercises a specific PR's server rather than whatever staging is serving.
+sai_version_tag=
+
+# Presenter feed (DEBUG builds only, LAN-only plaintext ws://). Leave blank to disable; if
+# concierge_url already points at a LAN/dev host the URL is derived from it.
+presenter_url=
+presenter_key=
+
+# Release signing. Absent, `assembleRelease` fails loudly — which is the point. It used to fall back
+# to the DEBUG config, i.e. the committed sample keystore, and silently ship a sample-signed APK.
+# `app/sample.keystore` is the DEBUG signing config and stays tracked: a stable debug signature is
+# what the Meta AI registration binds to.
+release_store_file=
+release_store_password=
+release_key_alias=
+release_key_password=

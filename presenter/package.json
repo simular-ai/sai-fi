@@ -1,0 +1,20 @@
+{
+  "name": "sai-fi-presenter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Demo dashboard for the sai-fi call: conversation, log, state, glasses photos and both audio streams, mirrored to a laptop over the LAN.",
+  "scripts": {
+    "presenter": "tsx server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sai launcher icon. The foreground is app/build/sai-app-icon.png verbatim (the shared Sai app icon,
+  copied in rather than re-drawn so it can't drift from the desktop/iOS one).
+
+  The background is the artwork's own green. Adaptive icons crop the outer ~18% before the launcher
+  applies its mask, which would clip the PNG's rounded-square corners — filling the background with
+  the identical green makes that seam invisible, so the icon reads as one solid green tile in
+  whatever shape the launcher wants. The white glyph occupies the middle ~25–74% of the canvas, well
+  inside the 66dp safe zone, so the crop never touches it.
+
+  No <monochrome>: themed icons use the alpha channel only, and this artwork is a fully opaque
+  square — it would tint to a featureless blob rather than the glyph.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

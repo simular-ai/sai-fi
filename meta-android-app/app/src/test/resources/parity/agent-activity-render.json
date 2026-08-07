@@ -1,0 +1,132 @@
+[
+  {
+    "name": "status",
+    "input": {
+      "type": "status",
+      "status": "processing"
+    },
+    "expected": "status: processing"
+  },
+  {
+    "name": "progress with tool",
+    "input": {
+      "type": "progress",
+      "text": "searching",
+      "tool": "web.search"
+    },
+    "expected": "• searching (web.search)"
+  },
+  {
+    "name": "progress without tool",
+    "input": {
+      "type": "progress",
+      "text": "thinking"
+    },
+    "expected": "• thinking"
+  },
+  {
+    "name": "text",
+    "input": {
+      "type": "text",
+      "text": "here is what I found"
+    },
+    "expected": "here is what I found"
+  },
+  {
+    "name": "approval-request plain",
+    "input": {
+      "type": "approval-request",
+      "title": "delete the draft"
+    },
+    "expected": "⚠ approval needed: delete the draft"
+  },
+  {
+    "name": "approval-request select",
+    "input": {
+      "type": "approval-request",
+      "title": "Pick a method",
+      "options": [
+        {
+          "value": "sms",
+          "label": "Text"
+        }
+      ]
+    },
+    "expected": "⚠ choose: Pick a method"
+  },
+  {
+    "name": "approval-resolved",
+    "input": {
+      "type": "approval-resolved",
+      "status": "approved"
+    },
+    "expected": "✓ resolved (approved)"
+  },
+  {
+    "name": "complete with summary",
+    "input": {
+      "type": "complete",
+      "summary": "all done"
+    },
+    "expected": "✓ done: all done"
+  },
+  {
+    "name": "complete without summary",
+    "input": {
+      "type": "complete"
+    },
+    "expected": "✓ done"
+  },
+  {
+    "name": "error",
+    "input": {
+      "type": "error",
+      "text": "boom"
+    },
+    "expected": "✗ error: boom"
+  },
+  {
+    "name": "notice",
+    "input": {
+      "type": "notice",
+      "text": "the machine is waking up"
+    },
+    "expected": "ℹ the machine is waking up"
+  },
+  {
+    "name": "session-state with a queue",
+    "input": {
+      "type": "session-state",
+      "running": "check my email",
+      "queued": [
+        "book a table"
+      ]
+    },
+    "expected": "⋯ 1 waiting: book a table"
+  },
+  {
+    "name": "session-state blocked on the user",
+    "input": {
+      "type": "session-state",
+      "running": "book a table",
+      "blockedOn": "Which restaurant?",
+      "queued": []
+    },
+    "expected": "⋯ blocked on the user (\"Which restaurant?\"); nothing waiting"
+  },
+  {
+    "name": "session-state with nothing outstanding",
+    "input": {
+      "type": "session-state",
+      "queued": []
+    },
+    "expected": "⋯ nothing waiting"
+  },
+  {
+    "name": "unknown type falls through",
+    "input": {
+      "type": "heartbeat"
+    },
+    "expected": "heartbeat"
+  }
+]

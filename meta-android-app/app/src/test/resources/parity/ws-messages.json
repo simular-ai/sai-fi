@@ -1,0 +1,244 @@
+[
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-event",
+      "event": {
+        "type": "status",
+        "status": "processing"
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-event",
+      "event": {
+        "type": "complete",
+        "summary": "Your report is ready."
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-event",
+      "event": {
+        "type": "approval-request",
+        "id": "a1",
+        "title": "Send the email",
+        "description": "to finance@example.com",
+        "approvalType": "action",
+        "isLinkOnly": false,
+        "allowAlways": true
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-event",
+      "event": {
+        "type": "approval-request",
+        "id": "a2",
+        "title": "Which verification method?",
+        "description": "pick how to receive the code",
+        "approvalType": "select",
+        "isLinkOnly": false,
+        "allowAlways": false,
+        "options": [
+          {
+            "value": "sms",
+            "label": "Text message"
+          },
+          {
+            "value": "app",
+            "label": "Authenticator app"
+          }
+        ],
+        "multiple": false
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-event",
+      "event": {
+        "type": "error",
+        "text": "the browser crashed"
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-event",
+      "event": {
+        "type": "notice",
+        "text": "waking the machine"
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-event",
+      "event": {
+        "type": "queued-task-started",
+        "pendingId": "pend-1"
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-event",
+      "event": {
+        "type": "session-state",
+        "running": "check my email",
+        "blockedOn": "which restaurant?",
+        "queued": [
+          "book a table"
+        ]
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-activity",
+      "event": {
+        "type": "progress",
+        "text": "opening the browser"
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "agent-activity",
+      "event": {
+        "type": "progress",
+        "text": "tool failed",
+        "failed": true
+      }
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "speak",
+      "text": "I've got the photo."
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "instruct",
+      "text": "[system] that value was not offered — ask again"
+    }
+  },
+  {
+    "dir": "server->client",
+    "message": {
+      "type": "approval-timeout"
+    }
+  },
+  {
+    "dir": "client->server",
+    "message": {
+      "type": "effects",
+      "effects": [
+        {
+          "kind": "forwardToAgent",
+          "text": "book a table at 7"
+        }
+      ]
+    }
+  },
+  {
+    "dir": "client->server",
+    "message": {
+      "type": "effects",
+      "effects": [
+        {
+          "kind": "forwardToAgent",
+          "text": "what am I looking at?",
+          "attachLatestImage": true
+        }
+      ]
+    }
+  },
+  {
+    "dir": "client->server",
+    "message": {
+      "type": "effects",
+      "effects": [
+        {
+          "kind": "chooseOption",
+          "values": [
+            "sms"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "dir": "client->server",
+    "message": {
+      "type": "usage",
+      "usage": {
+        "promptTokens": 1200,
+        "responseTokens": 340,
+        "totalTokens": 1540
+      }
+    }
+  },
+  {
+    "dir": "client->server",
+    "message": {
+      "type": "attachment",
+      "attachment": {
+        "path": "users/u1/uploads/glasses.jpg",
+        "name": "glasses.jpg",
+        "mime": "image/jpeg",
+        "size": 182400,
+        "downloadUrl": "https://storage.example.com/glasses.jpg"
+      }
+    }
+  },
+  {
+    "dir": "client->server",
+    "message": {
+      "type": "location",
+      "location": {
+        "lat": 1.2831,
+        "lon": 103.8607,
+        "accuracyM": 18,
+        "label": "Marina Bay, Singapore",
+        "approximate": false,
+        "capturedAt": 1700000000000
+      }
+    }
+  },
+  {
+    "dir": "client->server",
+    "message": {
+      "type": "location",
+      "location": {
+        "lat": 1.29,
+        "lon": 103.85,
+        "accuracyM": 2400,
+        "approximate": true,
+        "capturedAt": 1700000000000
+      }
+    }
+  },
+  {
+    "dir": "client->server",
+    "message": {
+      "type": "keepalive"
+    }
+  }
+]
