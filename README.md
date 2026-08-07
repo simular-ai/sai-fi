@@ -17,8 +17,6 @@ in the server repository.
   hardware.** Seven checks, ~15 minutes, each naming what it actually exercises.
 - [`docs/SAI_GLASSES_APP.md`](docs/SAI_GLASSES_APP.md) — this app's architecture: modules, call
   phases, DAT platform facts, dev runbook.
-- [`docs/SAI_GLASSES_DEMO.md`](docs/SAI_GLASSES_DEMO.md) — the live-demo runbook, glasses and
-  presenter together.
 
 ## Prerequisites
 
@@ -77,7 +75,7 @@ A demo dashboard: the live conversation, the log, call state, glasses photos, an
 mirrored from the phone to a laptop.
 
 ```bash
-cd presenter && npm install && npm run presenter -- --port 8899 --key hunter2
+cd presenter && npm install && npm run presenter -- --port 8899 --key <secret>
 ```
 
 Then set `presenter_url` and `presenter_key` in `local.properties`. **DEBUG builds only**, LAN-only

@@ -9,7 +9,7 @@
  * /session and the concierge WS on stage), and audio fan-out has no business sharing that process.
  * This one can crash, be restarted, or be abandoned mid-demo with zero consequence for the call.
  *
- *   npx tsx scripts/presenter/server.ts --key hunter2 --port 8899
+ *   cd presenter && npm install && npm run presenter -- --key <secret> --port 8899
  *
  * Nothing is persisted. One publisher at a time (newest wins), N watchers.
  */

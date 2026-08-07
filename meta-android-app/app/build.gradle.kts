@@ -63,7 +63,7 @@ android {
     // Presenter feed (DEBUG builds only — see CallService): the phone publishes the live call (audio,
     // conversation text, logs, glasses photos) to a laptop dashboard so an audience can hear and read
     // it, since Sai's replies otherwise only reach the wearer's glasses speaker. Run the server with
-    // `npm run presenter --workspace=scripts`; it prints the exact values to paste here. Leave
+    // `cd presenter && npm run presenter`; it prints the exact values to paste here. Leave
     // presenter_url empty and it is derived from concierge_url's host when that host is a LAN/dev
     // address, so pointing the app at your laptop is enough. Empty + non-local concierge_url = off.
     buildConfigField("String", "PRESENTER_URL", "\"${localProperties.getProperty("presenter_url", "")}\"")

@@ -1,11 +1,23 @@
 # sai-fi — Android Client for the Voice Concierge
 
 The standalone Android app that puts the voice concierge on **Meta Ray-Ban glasses**: a thin
-native shell around a client-side Gemini Live audio session and a WS relay to cloud-api. The
-concierge _service_ it talks to is `docs/VOICE_CONCIERGE.md`; testing is
-`docs/TESTING_CONCIERGES.md` (§6 = on-device); the doc map is `docs/CONCIERGE_OVERVIEW.md`.
-Platform research background: `docs/plans/2026-07-01-meta-rayban-display-integration.md` and
-`2026-07-02-meta-rayban-mic-access-research.md`.
+native shell around a client-side Gemini Live audio session and a WS relay to cloud-api.
+
+To verify a build on hardware, start with [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md).
+
+**The server side lives in another repository.** The wire contract this app implements is
+[`CONCIERGE_CLIENT_PROTOCOL.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/CONCIERGE_CLIENT_PROTOCOL.md);
+the concierge _service_ behind it is
+[`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md),
+and the doc map is
+[`CONCIERGE_OVERVIEW.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/CONCIERGE_OVERVIEW.md)
+— all in [`simular-ai/simular-pro-unified-ui`](https://github.com/simular-ai/simular-pro-unified-ui).
+**Bare section references below of the form `VOICE_CONCIERGE.md §N` mean that repo, not this one.**
+
+The DAT platform research this design rests on — the three-way glasses platform comparison, the
+mic-access and Meta-AI-coexistence go/no-go findings, and the distribution constraints — is recorded
+in that repo's `docs/plans/2026-07-01-meta-rayban-display-integration.md` and
+`docs/plans/2026-07-02-meta-rayban-mic-access-research.md`.
 
 **Code:** `meta-android-app/` (Kotlin, standalone app "sai-fi",
 `applicationId ai.simular.saiglasses`, package `…cameraaccess.saispike`).
@@ -83,7 +95,7 @@ tools[], voice }` — **every field opaque server config**; never hardcode any o
    (re)connect is preceded by a fresh `POST /session`; mid-call Live reconnect is **baseline
    behavior**, not hardening. Connection uses the **`BidiGenerateContentConstrained`** method
    with `access_token=` (a plain `BidiGenerateContent?key=` fails 1007 — real-API-keys only).
-3. **WS protocol** — authoritative message/effect lists live in `docs/VOICE_CONCIERGE.md` §3
+3. **WS protocol** — authoritative message/effect lists live in [`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md) §3
    (effects up; agent-event/agent-activity/speak/instruct/approval-timeout down; plus `usage` and
    `attachment` client messages). Don't duplicate them here — port from
    `transport/protocol.ts`.
@@ -112,7 +124,7 @@ answered without waking the agent), `switchMachine` (reconnects the concierge WS
 VM; Live audio session keeps running; its tool response resets the model's machine context),
 `endCall` (asks about running/queued work first; spoken goodbye then teardown; fixed ~1.8s delay),
 `captureImage` (DAT photo → upload → WS attachment → attached to the next forward; server half
-in `docs/VOICE_CONCIERGE.md` §5). **Where the user is** rides the same rail but is not a tool: the
+in [`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md) §5). **Where the user is** rides the same rail but is not a tool: the
 model sets `includeLocation` on the `forwardToAgent`/`relayToAgent` that needs it, and
 `sendEffectsWithRequestedContext` reads a fresh fix (`PhoneLocation`) and sends it just before the
 effects, exactly as `attachLatestImage` does for a photo. Neither flag reaches the server —
@@ -166,7 +178,7 @@ naming, pruned the CameraAccess sample UI, `MainActivity` slimmed to a callback 
   bystander audio leaves the device even though tuned VAD keeps bystanders from _triggering_ Sai.
   There is no recording indicator for continuous audio and no documented provider-retention stance
   yet. Tap-to-talk (§3, a UX toggle) is the privacy-narrowing option — consider it the default for
-  any non-lab use. Full treatment + open questions in `docs/VOICE_CONCIERGE.md` §6 "Privacy & data
+  any non-lab use. Full treatment + open questions in [`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md) §6 "Privacy & data
   handling."
 - Footgun: `local.properties` `concierge_url` may point at `localhost:8080` — the git-tracked
   default is staging; double-check before building for a device.
@@ -238,7 +250,7 @@ Carried forward from the retired 2026-07-02 integration plan/runbook — these s
   arrive on a bare session, none of these costs apply.
 
 - Distribution is gated (invite-only release channels during the developer preview; iOS App
-  Store blocked by the `ExternalAccessory`/MFi requirement) — details in
+  Store blocked by the `ExternalAccessory`/MFi requirement) — details in the server repo's
   `docs/plans/2026-07-02-meta-rayban-mic-access-research.md`.
 
 ## 7. Running it (dev)
@@ -251,7 +263,8 @@ run locally), and the app runs straight from **Android Studio over USB debugging
      default, so usually nothing to set).
    - To pin **a specific PR's staging revision**, add `sai_version_tag=<the PR's version tag>`; the app
      sends it as the `x-sai-version` header on every cloud-api call so the gateway routes to that
-     revision (e.g. this PR: `sai_version_tag=feat-glasses-voice-concierge-1635`).
+     revision instead of whatever staging is currently serving. Leave it blank against a local server
+     — it means nothing there. Check 1 of `ON_DEVICE_CHECK.md` is how you confirm the pin took.
 2. **Firebase sign-in config** (once) — `firebase_app_id`, `firebase_api_key`, `firebase_project_id`,
    `web_client_id` from the simular Firebase project (see §5); register the app's package + signing
    SHA-1 there.
@@ -265,7 +278,7 @@ path and the only one that survives unplugging.)
 
 ## 8. Testing strategy (device-side)
 
-Layered like the server (see `docs/TESTING_CONCIERGES.md` §4–6 for the server layers):
+Layered like the server (see [`TESTING_CONCIERGES.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/TESTING_CONCIERGES.md) §4–6 for the server layers):
 
 1. **Cross-port parity fixtures — IMPLEMENTED.** The TS source of truth for the ported strings now
    lives in `cloud-api/src/services/concierge/voice/core/nudges.ts` (`describeAgentEvent`,
@@ -293,7 +306,7 @@ Layered like the server (see `docs/TESTING_CONCIERGES.md` §4–6 for the server
    not hear itself; verify with wired headphones if it does), SCO route + wideband check,
    route-loss drill.
 5. **Manual E2E voice smoke** per phase exit — the on-device checklist and E2E voice arc live
-   in `docs/TESTING_CONCIERGES.md` §6; re-run prior phases' checks as regression.
+   in [`TESTING_CONCIERGES.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/TESTING_CONCIERGES.md) §6; re-run prior phases' checks as regression.
 
 ## 9. Open items
 
@@ -311,7 +324,7 @@ Layered like the server (see `docs/TESTING_CONCIERGES.md` §4–6 for the server
 - On-device E2E for Phases 1/2/4 checklists; 30-min screen-off battery soak.
 - `endCall`: playback-drained signal instead of the fixed 1.8s delay. (The hang-up-vs-work
   question is decided: the model always asks whether to keep or stop running/queued work before
-  `endCall` — see `docs/VOICE_CONCIERGE.md` §8.)
+  `endCall` — see [`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md) §8.)
 - Machine-switch: prompt staleness is handled (the `switchMachine` tool response carries a
   context update naming the new machine), but the fuzzy `contains` name match could still
   mis-target similar names.

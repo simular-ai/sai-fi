@@ -9,7 +9,7 @@ file is the module's own reference — the one thing you cannot get anywhere els
 **secrets table** below, which is exhaustive.
 
 - `docs/SAI_GLASSES_APP.md` — architecture: modules, call phases, DAT platform facts.
-- `docs/SAI_GLASSES_DEMO.md` — the live-demo runbook.
+- `docs/ON_DEVICE_CHECK.md` — verify a build on real hardware: seven checks, ~15 minutes.
 
 Derived from Meta's public **CameraAccess** DAT sample; the build files and manifest still carry
 Meta's copyright headers, and the concierge implementation under `app/src/main/java/.../saispike/`
