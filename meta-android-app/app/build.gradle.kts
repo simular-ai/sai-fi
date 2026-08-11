@@ -154,4 +154,7 @@ dependencies {
   // JSONObject works off-device (the android.jar one is a throwing stub in unit tests).
   testImplementation(libs.junit)
   testImplementation(libs.json)
+  // Virtual-time control for the GlassesLink settle window — the bug it guards is a StateFlow that
+  // emits synchronously on subscribe, which only a coroutine test can reproduce.
+  testImplementation(libs.kotlinx.coroutines.test)
 }
