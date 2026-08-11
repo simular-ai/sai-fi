@@ -7,13 +7,15 @@ WebSocket; the glasses are the microphone, speaker and camera, reached through M
 Toolkit via the Meta AI companion app. Talk to Sai hands-free, hand work to an agent running on your
 own machine, and hear about it when it is done.
 
-- [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md) — **start here to verify a build on real
-  hardware.** Seven checks, ~15 minutes, each naming what it actually exercises.
+- [`docs/DIRECTORY.md`](docs/DIRECTORY.md) — **new to the code? start here.** A one-line-per-file
+  map of the whole repo, so you can find what you want without reading the tree.
+- [`docs/SAI_GLASSES_APP.md`](docs/SAI_GLASSES_APP.md) — this app's architecture: modules, call
+  phases, DAT platform facts, dev runbook.
 - [`docs/CONCIERGE_CLIENT_PROTOCOL.md`](docs/CONCIERGE_CLIENT_PROTOCOL.md) — the wire contract between
   this app and the server: `POST /v1/concierge/session`, the WS message tables, the close codes, and
   the five tools this client is obliged to answer itself.
-- [`docs/SAI_GLASSES_APP.md`](docs/SAI_GLASSES_APP.md) — this app's architecture: modules, call
-  phases, DAT platform facts, dev runbook.
+- [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md) — **verify a build on real hardware.** Seven
+  checks, ~15 minutes, each naming what it actually exercises.
 
 ## Prerequisites
 
