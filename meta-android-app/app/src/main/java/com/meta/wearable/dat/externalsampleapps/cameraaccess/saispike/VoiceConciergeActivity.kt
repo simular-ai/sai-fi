@@ -16,8 +16,13 @@ package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -35,51 +40,73 @@ import com.meta.wearable.dat.core.types.PermissionStatus
 import com.meta.wearable.dat.core.types.RegistrationState
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.BuildConfig
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.ConciergeScreen
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.ConciergeUi
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.theme.SaiTheme
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** How long [VoiceConciergeActivity.glassesLinkedNow] waits for the DAT flows before giving up. */
+/**
+ * How long [VoiceConciergeActivity.glassesLinkedNow] waits for DAT to report a *connected* device
+ * before giving up and refusing the grant.
+ *
+ * A feedback budget, not a "wait for the user to put the glasses on" budget: the press already
+ * happened, and something has to appear on screen promptly either way.
+ */
 private const val LINK_PROBE_TIMEOUT_MS = 1_500L
 
-class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
+// The control surface AND its state. `ConciergeScreen` renders this directly — there was an interface
+// (`ConciergeUi`) between them whose only job was to narrow what the composables could touch, but with
+// one implementer and one caller it was ceremony. The `val` vs `var` split below is the contract it
+// used to state: `var` is what the UI writes back, everything else is the Activity's to own. The
+// Compose reads still work because these are `mutableStateOf` snapshot fields read through getters.
+class VoiceConciergeActivity : ComponentActivity() {
   // Machine picker (like `sai machine`): fetched from GET /v1/agents/machines, selected in a dropdown.
-  override val machines = mutableStateListOf<Machine>()
-  override var selectedMachine by mutableStateOf<Machine?>(null)
-  override var machinesInfo by mutableStateOf("") // short non-error status ("Loading…", "No machines found")
-  override var machinesFetchOk by mutableStateOf(false) // last load succeeded (dropdown enabled)
+  val machines = mutableStateListOf<Machine>()
+  var selectedMachine by mutableStateOf<Machine?>(null)
+  var machinesInfo by mutableStateOf("") // short non-error status ("Loading…", "No machines found")
+  var machinesFetchOk by mutableStateOf(false) // last load succeeded (dropdown enabled)
 
   // Voice-UX settings (in-memory; threaded into StartParams at call start — no persistence yet).
-  override var askFirstThresholdSec by mutableStateOf("15")
+  var askFirstThresholdSec by mutableStateOf("15")
 
   // DAT glasses registration (one-time) — enables the temple button to start/stop the call.
-  override var glassesReg by mutableStateOf<RegistrationState?>(null)
-  // True when DAT reports at least one device with LinkState.CONNECTED (powered on / in range);
-  // null until the devices flow has answered either way. See ConciergeUi.glassesLinked for why the
-  // unknown state is kept distinct rather than collapsed into false.
-  override var glassesLinked by mutableStateOf<Boolean?>(null)
+  var glassesReg by mutableStateOf<RegistrationState?>(null)
+  /**
+   * DAT reports a device with LinkState.CONNECTED (powered on / in range), or `null` while we don't
+   * know yet.
+   *
+   * Three states, not two, and the difference matters: a `false` standing in for "hasn't answered
+   * yet" is what once disabled the camera-grant button on exactly the run that needed it. Gate
+   * destructive/blocking UI on `== false` — an affirmative "no device" — and leave `null` permissive;
+   * say nothing about the glasses at all while `null`. The DAT flows behind this cannot produce the
+   * unknown state on their own — they are StateFlows seeded with "nothing connected" — so [GlassesLink]
+   * is what turns that seed into an honest `null`.
+   */
+  var glassesLinked by mutableStateOf<Boolean?>(null)
   // Glasses-camera DAT permission (device-level, via Meta AI). Shown as an action only when missing.
-  override var glassesCameraGranted by mutableStateOf(false)
+  var glassesCameraGranted by mutableStateOf(false)
   // Our own "why we want location" dialog, shown once at sign-in, immediately before the system sheet.
-  override var locationRationaleOpen by mutableStateOf(false)
+  var locationRationaleOpen by mutableStateOf(false)
   // Request the glasses camera permission automatically once per process, right after registration.
   private var cameraPermRequested = false
 
   // Auth state (Google Sign-In → Firebase). Drives the sign-in UI + gates loading machines / starting.
-  override var signedIn by mutableStateOf(false)
-  override var userEmail by mutableStateOf<String?>(null)
+  var signedIn by mutableStateOf(false)
+  var userEmail by mutableStateOf<String?>(null)
 
   // Section errors: full text in a reopenable scrollable dialog (not truncated inline red).
-  override var authError by mutableStateOf<String?>(null)
-  override var authErrorOpen by mutableStateOf(false)
-  override var machinesError by mutableStateOf<String?>(null)
-  override var machinesErrorOpen by mutableStateOf(false)
-  override var glassesError by mutableStateOf<String?>(null)
-  override var glassesErrorOpen by mutableStateOf(false)
+  var authError by mutableStateOf<String?>(null)
+  var authErrorOpen by mutableStateOf(false)
+  var machinesError by mutableStateOf<String?>(null)
+  var machinesErrorOpen by mutableStateOf(false)
+  var glassesError by mutableStateOf<String?>(null)
+  var glassesErrorOpen by mutableStateOf(false)
 
   private fun showAuthError(msg: String) {
     authError = msg
@@ -223,34 +250,80 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
       }
     }
     // Live DAT link (powered on / in range) — separate from registration, which persists offline.
+    //
+    // Flatten DAT into `null | Boolean` and hand it to [GlassesLink.observe]. Both
+    // `Wearables.devices` and the per-device metadata are StateFlows, so the first reading is a seeded
+    // empty set — see GlassesLink's docs. The observe call is the whole defence; do not inline a
+    // collector here that maps that first empty set to `false`.
     lifecycleScope.launch {
-      Wearables.devices.collectLatest { ids ->
-        if (ids.isEmpty()) {
-          setGlassesLinked(false)
-          return@collectLatest
-        }
-        val flows = ids.mapNotNull { Wearables.devicesMetadata[it] }
-        if (flows.isEmpty()) {
-          setGlassesLinked(false)
-          return@collectLatest
-        }
-        combine(flows) { devices -> devices.any { it.linkState == LinkState.CONNECTED } }.collect {
-          setGlassesLinked(it)
-          maybeAutoRequestGlassesCamera()
-        }
+      @OptIn(ExperimentalCoroutinesApi::class)
+      val readable =
+          Wearables.devices.transformLatest { ids ->
+            val flows = ids.mapNotNull { Wearables.devicesMetadata[it] }
+            if (flows.isEmpty()) {
+              emit(null)
+            } else {
+              emitAll(
+                  combine(flows) { devices ->
+                    devices.any { it.linkState == LinkState.CONNECTED }
+                  })
+            }
+          }
+      GlassesLink().observe(readable) { linked ->
+        publishGlassesLink(linked)
+        if (linked == true) maybeAutoRequestGlassesCamera()
+      }
+    }
+    // A call ends leaving the *service's* mid-call route string in place — "on glasses: SCO", or the
+    // alarming "glasses lost — …reconnect glasses" — and nothing recomputed it: the DAT link hasn't
+    // changed, and onResume never fires because this screen was already resumed. Recompute on the edge
+    // back to idle, which is exactly when this Activity takes the line back.
+    lifecycleScope.launch {
+      CallController.state.map { it.active }.distinctUntilChanged().collect { active ->
+        if (!active) refreshRouteStatus()
       }
     }
   }
 
+  /**
+   * Keeps the idle audio-route line in step with the hardware.
+   *
+   * The line is derived from the phone's list of communication devices, and the glasses' SCO device
+   * appears *after* DAT reports the link — often a second or two after. So refreshing on the DAT edge
+   * alone latched "phone" for the whole pre-call window: no further link change was coming, and
+   * onResume never fires when the screen was already open. The header then read "phone" for a call that
+   * went on to start on glasses, since the route is decided again at Start.
+   *
+   * Registered only while resumed — mid-call the service owns this string, and [refreshIdleRoute]
+   * refuses to touch it.
+   */
+  private val audioDevices =
+      object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = refreshIdleRoute()
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) =
+            refreshIdleRoute()
+      }
+
+  /** Recompute the route line, unless a call owns it (the service reports the real device then). */
+  private fun refreshIdleRoute() {
+    if (!CallController.state.value.active) refreshRouteStatus()
+  }
+
   override fun onResume() {
     super.onResume()
-    if (!CallController.state.value.active) refreshRouteStatus()
+    refreshIdleRoute()
+    getSystemService(AudioManager::class.java)
+        ?.registerAudioDeviceCallback(audioDevices, Handler(Looper.getMainLooper()))
     refreshGlassesCameraStatus()
     startWindowMirror()
   }
 
   override fun onPause() {
     super.onPause()
+    runCatching {
+      getSystemService(AudioManager::class.java)?.unregisterAudioDeviceCallback(audioDevices)
+    }
     // The window has no surface to copy once we're not resumed, and there is nothing worth showing
     // the room anyway — the capture is of this app's UI.
     windowCapture?.stop()
@@ -271,7 +344,7 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
   }
 
   /** One-time DAT registration with Meta AI (not a live Bluetooth link). */
-  override fun registerGlasses() {
+  fun registerGlasses() {
     if (!hasBt()) {
       datBtPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
       return
@@ -284,13 +357,13 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
    * opens and the user gets stuck in a flow that can't succeed.
    *
    * The link is read **live** here rather than trusted from [glassesLinked]. That field is fed by the
-   * devices collector in [onCreate], which on a first install has usually not emitted by the time the
-   * user finishes registering — so a stale `false` was refusing the grant on exactly the run that
+   * devices collector in [onCreate], which on a first install has usually not heard from DAT by the time
+   * the user finishes registering — so a stale `false` was refusing the grant on exactly the run that
    * needs it, and the button that would have retried was disabled by the same flag. Checking the SDK
    * directly settles it; the guard itself is worth keeping, so a genuinely powered-off pair still gets
    * an explanation instead of a Meta AI flow that cannot complete.
    */
-  override fun requestGlassesCamera() {
+  fun requestGlassesCamera() {
     clearGlassesError()
     lifecycleScope.launch {
       if (glassesLinked != true && !glassesLinkedNow()) {
@@ -302,39 +375,44 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
   }
 
   /**
-   * One bounded read of "is a device connected right now", independent of the collected flag.
+   * One bounded **wait** for "is a device connected right now", independent of the collected flag.
    *
-   * Bounded because these flows need not emit at all when nothing is attached — an unguarded
-   * `first()` would hang the grant instead of refusing it.
+   * It has to wait rather than sample, and the difference is the whole value of this function. Every
+   * DAT flow involved is a `StateFlow` with a value already in it — an empty device set, a device whose
+   * link state is still CONNECTING — so a plain `first()` returns that seed instantly, the timeout is
+   * never spent, and the "live re-probe" this exists to be answered "not linked" before DAT had a
+   * chance to say otherwise. The user got "turn the glasses on" about glasses already on their face.
+   *
+   * Bounded because the wait may never be satisfied: nothing is attached, and no emission is coming.
    */
   private suspend fun glassesLinkedNow(): Boolean {
     val linked =
         withTimeoutOrNull(LINK_PROBE_TIMEOUT_MS) {
-          val ids = Wearables.devices.first()
-          if (ids.isEmpty()) return@withTimeoutOrNull false
+          val ids = Wearables.devices.first { it.isNotEmpty() }
           val flows = ids.mapNotNull { Wearables.devicesMetadata[it] }
           if (flows.isEmpty()) return@withTimeoutOrNull false
-          combine(flows) { devices -> devices.any { it.linkState == LinkState.CONNECTED } }.first()
+          combine(flows) { devices -> devices.any { it.linkState == LinkState.CONNECTED } }
+              .first { connected -> connected }
         } ?: false
     // Keep the rest of the screen honest: if the probe found a link the collector had not reported
     // yet, "Link: disconnected" is now a lie.
-    if (linked) setGlassesLinked(true)
+    if (linked) publishGlassesLink(true)
     return linked
   }
 
   /**
-   * Record the live DAT link, and keep the audio-route line in step with it.
+   * Record the live DAT link — `null` for "DAT hasn't said" — and keep the audio-route line in step.
    *
-   * The route line is derived from whether a glasses SCO device is present, which changes at exactly
-   * the moments the link does — so without this the header kept whatever it computed at onCreate and
-   * only corrected itself on the next resume.
+   * The route line is derived from whether a glasses SCO device is present, which changes around the
+   * moments the link does, so this is one of its triggers. Not a sufficient one: SCO lags the DAT link,
+   * which is why [audioDevices] watches the hardware directly.
    */
-  private fun setGlassesLinked(linked: Boolean) {
+  private fun publishGlassesLink(linked: Boolean?) {
     val changed = glassesLinked != linked
     glassesLinked = linked
     // During a call the service owns this line (it reports the real selected device, incl. mid-call
     // SCO loss); recomputing from the activity would stomp a more accurate string with a guess.
-    if (changed && !CallController.state.value.active) refreshRouteStatus()
+    if (changed) refreshIdleRoute()
   }
 
   private fun maybeAutoRequestGlassesCamera() {
@@ -408,7 +486,7 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
    * Either way the one-shot is already spent (set when the rationale opened), matching the previous
    * behaviour of the bare system prompt — this adds an explanation, not a second ask.
    */
-  override fun onLocationRationale(proceed: Boolean) {
+  fun onLocationRationale(proceed: Boolean) {
     locationRationaleOpen = false
     if (!proceed) return
     locationPermission.launch(
@@ -417,7 +495,7 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
   }
 
   /** Show the Credential Manager Google sign-in sheet (needs the Firebase config in local.properties). */
-  override fun signIn() {
+  fun signIn() {
     if (!SaiAuth.isConfigured) {
       showAuthError(
           "Firebase not configured — set firebase_app_id / firebase_api_key / " +
@@ -436,7 +514,7 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
     }
   }
 
-  override fun signOut() {
+  fun signOut() {
     lifecycleScope.launch {
       SaiAuth.signOut(this@VoiceConciergeActivity)
       refreshAuthState()
@@ -463,7 +541,7 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
               PackageManager.PERMISSION_GRANTED
 
   /** Load the user's machines for the picker (like `sai machine`). */
-  override fun loadMachines() {
+  fun loadMachines() {
     machinesInfo = "Loading…"
     clearMachinesError()
     machinesFetchOk = false
@@ -501,7 +579,7 @@ class VoiceConciergeActivity : ComponentActivity(), ConciergeUi {
   }
 
   /** Gate Start on sign-in + mic + notification + BT (for SCO detect), then hand off to the service. */
-  override fun onStartClicked() {
+  fun onStartClicked() {
     clearGlassesError()
     if (!SaiAuth.isSignedIn()) {
       showAuthError("Sign in first")

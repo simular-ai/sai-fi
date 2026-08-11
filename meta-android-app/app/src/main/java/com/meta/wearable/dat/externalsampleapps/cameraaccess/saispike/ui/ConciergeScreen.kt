@@ -3,8 +3,9 @@
  */
 
 // The Compose half of VoiceConciergeActivity, lifted out of it: the Activity kept ~460 lines of UI
-// alongside ~500 of lifecycle and call plumbing in one class. Everything it needs arrives through
-// ConciergeUi, so the state still lives on the Activity and this file is pure rendering.
+// alongside ~500 of lifecycle and call plumbing in one class. The state still lives on the Activity —
+// this file takes it directly and is pure rendering. Only the `var` fields on the Activity are meant
+// to be written from here; the rest are read-only by convention (there is no interface enforcing it).
 //
 // Layout: Controls (account / machines / glasses / settings, as cards in one LazyColumn) and, in
 // DEBUG builds only, a Logs pane behind a tab (the interleaved transcript + log stream, plus the
@@ -93,6 +94,7 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.BuildConfig
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.CallController
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.Prefs
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.SaiAuth
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.VoiceConciergeActivity
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.theme.JetBrainsMono
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.theme.SaiTheme
 import kotlinx.coroutines.launch
@@ -110,7 +112,7 @@ private fun saiEdge() = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConciergeScreen(ui: ConciergeUi) {
+fun ConciergeScreen(ui: VoiceConciergeActivity) {
   val s by CallController.state.collectAsState()
   val ctx = LocalContext.current
   // Auto-load the machine list once signed in (like `sai machine` after CLI login).
@@ -376,7 +378,13 @@ fun ConciergeScreen(ui: ConciergeUi) {
             // Two different degraded starts, and only the first used to be called out. A linked pair
             // with no camera grant looks completely healthy here, right up until "take a photo"
             // fails mid-call with nothing on this screen having warned you.
-            if (ui.glassesLinked != true) {
+            //
+            // `== false`, not `!= true`: this asserts something about the glasses, so it needs DAT to
+            // have actually said it. On the unknown state it used to claim "aren't linked" on the same
+            // screen that was simultaneously reporting "Link: checking…" — contradicting itself, and
+            // contradicting the contract on VoiceConciergeActivity.glassesLinked. Neither hint shows while unknown,
+            // which is the honest answer and a brief one.
+            if (ui.glassesLinked == false) {
               Hint(
                   "Glasses aren't linked — the call runs on phone audio.",
                   detail =
@@ -712,7 +720,7 @@ private fun SectionErrorAffordance(
  * without the user having answered anything.
  */
 @Composable
-private fun LocationRationaleDialog(ui: ConciergeUi) {
+private fun LocationRationaleDialog(ui: VoiceConciergeActivity) {
   if (!ui.locationRationaleOpen) return
   AlertDialog(
       onDismissRequest = {},
