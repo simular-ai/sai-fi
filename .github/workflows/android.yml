@@ -1,9 +1,9 @@
 name: build
 
 # The only automated gate this repo has. There is no instrumentation suite and no device in CI, so
-# what this proves is narrow and worth stating: the module compiles, and 87 JVM tests pass — among
-# them the cross-port parity tests that hold this Kotlin implementation of the nudge strings, the
-# activity log and the WS protocol to the same JSON fixtures the TypeScript server is held to.
+# what this proves is narrow and worth stating: the module compiles, and the JVM unit tests pass —
+# among them the cross-port parity tests that hold this Kotlin implementation of the nudge strings,
+# the activity log and the WS protocol to the same JSON fixtures the TypeScript server is held to.
 #
 # What it does NOT prove: anything about audio, the camera, the glasses, or the Compose UI.
 

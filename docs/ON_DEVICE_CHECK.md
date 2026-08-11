@@ -79,9 +79,8 @@ streams to a browser. DEBUG builds only, LAN only.
 
 Each names **what it actually exercises** — that is the point of running these specific seven rather
 than "have a chat with it". Kotlin names (`GreetingGate`, `HangupPolicy`, `CallService`) are in this
-repo; `.ts` paths are in the server repo,
-[`simular-ai/simular-pro-unified-ui`](https://github.com/simular-ai/simular-pro-unified-ui), under
-`cloud-api/src/services/concierge/voice/`.
+repo; a bare `.ts` filename means the server's half of the same thing, and what the client owes it
+either way is [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md).
 
 ### 1. Greeting
 
@@ -189,8 +188,7 @@ worth keeping should become an executable spec rather than a memory — the serv
 | She narrates every step | The update-discipline prompt block is not reaching her — inspect the prompt in the `POST /session` response, or dump it in the server repo with `npm run -w cloud-api prompt:dump glasses` |
 | Nothing in the presenter | DEBUG build? `presenter_url` set? Same LAN? It is best-effort and never blocks a call |
 
-**Going further.** This is the short gate. The cumulative by-ear matrix — 60-odd rows, one per bug
-ever found on a device — is `TESTING_CONCIERGES.md` §6 in the
-[server repo](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/TESTING_CONCIERGES.md),
-along with the demo runbook and its on-stage recovery notes. Run those for a release or a stage
-rehearsal; run these seven for a change.
+**Going further.** This is the short gate — run it for a change. The cumulative by-ear matrix (60-odd
+rows, one per bug ever found on a device) and the demo runbook with its on-stage recovery notes live
+with the server's test docs and are **not mirrored here**; ask for them before a release or a stage
+rehearsal, because these seven checks are not a substitute for either.

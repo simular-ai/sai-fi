@@ -5,19 +5,16 @@ native shell around a client-side Gemini Live audio session and a WS relay to cl
 
 To verify a build on hardware, start with [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md).
 
-**The server side lives in another repository.** The wire contract this app implements is
-[`CONCIERGE_CLIENT_PROTOCOL.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/CONCIERGE_CLIENT_PROTOCOL.md);
-the concierge _service_ behind it is
-[`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md),
-and the doc map is
-[`CONCIERGE_OVERVIEW.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/CONCIERGE_OVERVIEW.md)
-— all in [`simular-ai/simular-pro-unified-ui`](https://github.com/simular-ai/simular-pro-unified-ui).
-**Bare section references below of the form `VOICE_CONCIERGE.md §N` mean that repo, not this one.**
+**The server side lives in another repository, and this repo does not link into it.** What the client
+is obliged to do is written down here instead, in
+[`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md) — the endpoints, the message tables, the
+close codes and the five device tools. Read that first; everything below describes how these modules
+meet it. The concierge service's own design (the FSM, billing, the cost guard) is deliberately **not**
+mirrored here: it is not this app's contract, and a copy would go stale without anything catching it.
 
-The DAT platform research this design rests on — the three-way glasses platform comparison, the
-mic-access and Meta-AI-coexistence go/no-go findings, and the distribution constraints — is recorded
-in that repo's `docs/plans/2026-07-01-meta-rayban-display-integration.md` and
-`docs/plans/2026-07-02-meta-rayban-mic-access-research.md`.
+The DAT platform research this design rests on — the glasses platform comparison, the mic-access and
+Meta-AI-coexistence go/no-go findings, and the distribution constraints — is not linked either. Its
+conclusions are what §1 and §6 below record, which is the part that constrains this app.
 
 **Code:** `meta-android-app/` (Kotlin, standalone app "sai-fi",
 `applicationId ai.simular.saiglasses`, package `…cameraaccess.saispike`).
@@ -95,14 +92,16 @@ tools[], voice }` — **every field opaque server config**; never hardcode any o
    (re)connect is preceded by a fresh `POST /session`; mid-call Live reconnect is **baseline
    behavior**, not hardening. Connection uses the **`BidiGenerateContentConstrained`** method
    with `access_token=` (a plain `BidiGenerateContent?key=` fails 1007 — real-API-keys only).
-3. **WS protocol** — authoritative message/effect lists live in [`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md) §3
-   (effects up; agent-event/agent-activity/speak/instruct/approval-timeout down; plus `usage` and
-   `attachment` client messages). Don't duplicate them here — port from
-   `transport/protocol.ts`.
+3. **WS protocol** — the message and effect tables are
+   [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md) §2–3 (effects up;
+   agent-event/agent-activity/speak/instruct/approval-timeout down; plus `usage`, `attachment`,
+   `location` and `keepalive` client messages). Don't duplicate them here either — and note that the
+   prose is not the authority: `parity/ws-messages.json` is, one example of every message, replayed
+   through the dispatcher by `ConciergeSocketParityTest`.
 4. **Nudge discipline (port exactly):** never inject a nudge mid-utterance (self-interruption);
    defer real nudges until `turnComplete`; on `serverContent.interrupted` flush queued playback
    (barge-in). There are no dead-air fills to speak or drop: the server-side watchdog that produced
-   them was removed outright (VOICE_CONCIERGE §4), so this is no longer a hazard to design around.
+   them was removed outright, so this is no longer a hazard to design around.
 5. **Tool responses:** answer **every** function call or the model stalls — `getSaiStatus` →
    local `ActivityLog` read (never forwarded); everything else `{result:'ok'}`.
 6. **Prompt-injection fencing:** agent-derived text is data, not instructions — keep the
@@ -114,17 +113,19 @@ tools[], voice }` — **every field opaque server config**; never hardcode any o
    mechanism used for capture-retry/completion nudges. **Once per call:** the greeting is gated by
    `GreetingGate` (re-armed in `startCall`), so a mid-call Live reconnect (token expiry / network)
    and a resume-after-pause — both of which re-run `setupComplete` — do **not** re-greet. It's model
-   _output_, not mic input, so it plays even in tap-to-talk mode where the mic window is closed at
-   connect, and barge-in is unaffected (the user can talk over it). The nudge text is kept in parity
-   with `nudges.ts` (`GREETING_NUDGE`) and consistent with the persona prompt's opening-greeting rule.
+   _output_, not mic input, so it does not wait on the mic being open, and barge-in is unaffected (the
+   user can talk over it). The nudge text is fixture-pinned (`GREETING_NUDGE` in the parity constants)
+   and consistent with the persona prompt's opening-greeting rule.
 
 **Client-local voice tools** (declared server-side, handled on-device): `getSaiStatus` (status
 pull), `recallHistory` (recent machine history via `GET /v1/agents/context` — recall questions
 answered without waking the agent), `switchMachine` (reconnects the concierge WS to another owned
 VM; Live audio session keeps running; its tool response resets the model's machine context),
 `endCall` (asks about running/queued work first; spoken goodbye then teardown; fixed ~1.8s delay),
-`captureImage` (DAT photo → upload → WS attachment → attached to the next forward; server half
-in [`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md) §5). **Where the user is** rides the same rail but is not a tool: the
+`captureImage` (DAT photo → upload → WS attachment → attached to the next forward; the client's half of
+the obligation, including the two-part failure text, is
+[`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md) §4). **Where the user is** rides the same
+rail but is not a tool: the
 model sets `includeLocation` on the `forwardToAgent`/`relayToAgent` that needs it, and
 `sendEffectsWithRequestedContext` reads a fresh fix (`PhoneLocation`) and sends it just before the
 effects, exactly as `attachLatestImage` does for a photo. Neither flag reaches the server —
@@ -174,12 +175,20 @@ naming, pruned the CameraAccess sample UI, `MainActivity` slimmed to a callback 
   persona rules**; don't weaken them client-side.
 - Ideal end-state: a **device-scoped credential** provisioned at glasses pairing, revocable
   per-device (today the credential is the user's own Firebase session).
-- **Privacy (open):** the glasses mic streams straight to Google Gemini Live (client-side), so
-  bystander audio leaves the device even though tuned VAD keeps bystanders from _triggering_ Sai.
-  There is no recording indicator for continuous audio and no documented provider-retention stance
-  yet. Tap-to-talk (§3, a UX toggle) is the privacy-narrowing option — consider it the default for
-  any non-lab use. Full treatment + open questions in [`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md) §6 "Privacy & data
-  handling."
+- **Privacy (open, and it got worse rather than better).** The glasses mic streams straight to Google
+  Gemini Live client-side, so everything it picks up — including people who never consented — leaves the
+  device. Tuned VAD only stops bystanders from _triggering_ Sai; it does not stop their voices being
+  captured and sent. The narrowing option this doc used to name was **tap-to-talk, and it has been
+  removed** (with the VAD off the model only replied on `activityEnd`, so every exchange cost two taps
+  and she could never answer while you were still talking — the tap now toggles mute). **Mute is not a
+  replacement:** it silences Sai's output and leaves the mic wide open, so exactly as much bystander
+  audio reaches Google. The only control that actually stops capture today is **Pause**, which drops
+  the mic and the Live session outright — a manual, all-or-nothing switch, not the per-turn gating this
+  item is asking for. Also unanswered: there is no recording indicator for continuous audio (Meta
+  requires a visible one for the _camera_; the audio equivalent on face-worn hardware has no answer),
+  no documented stance on what Google retains of the PCM and transcripts, and `recallHistory` puts
+  prior-session transcripts into the same model context, so the retention question covers conversation
+  history too, not just live audio. Treat all of this as unresolved before any non-lab use.
 - Footgun: `local.properties` `concierge_url` may point at `localhost:8080` — the git-tracked
   default is staging; double-check before building for a device.
 
@@ -249,9 +258,10 @@ Carried forward from the retired 2026-07-02 integration plan/runbook — these s
   confirm it on real hardware **before** committing to the camera-stream workaround — if taps do
   arrive on a bare session, none of these costs apply.
 
-- Distribution is gated (invite-only release channels during the developer preview; iOS App
-  Store blocked by the `ExternalAccessory`/MFi requirement) — details in the server repo's
-  `docs/plans/2026-07-02-meta-rayban-mic-access-research.md`.
+- Distribution is gated: invite-only release channels during the developer preview, and the iOS App
+  Store is blocked outright by the `ExternalAccessory`/MFi requirement. This is the constraint the
+  mic-access research found hardest, and it is a platform fact rather than something the app can work
+  around — Android-only, side-loaded, for as long as the preview lasts.
 
 ## 7. Running it (dev)
 
@@ -278,20 +288,16 @@ path and the only one that survives unplugging.)
 
 ## 8. Testing strategy (device-side)
 
-Layered like the server (see [`TESTING_CONCIERGES.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/TESTING_CONCIERGES.md) §4–6 for the server layers):
+Layered the same way the server's own suite is — deterministic first, by-ear last:
 
-1. **Cross-port parity fixtures — IMPLEMENTED.** The TS source of truth for the ported strings now
-   lives in `cloud-api/src/services/concierge/voice/core/nudges.ts` (`describeAgentEvent`,
-   `describeCompleteAskFirst`, `renderAgentActivity`, `APPROVAL_TIMEOUT_NUDGE`) alongside
-   `contract/activity-log.ts`. A generator script (`voice/contract/generate-fixtures.ts`) calls those
-   real functions + `ActivityLog` on a fixed injected clock and writes committed JSON fixtures to
-   `meta-android-app/app/src/test/resources/parity/` (agent-event nudges incl. prompt-injection
-   cases, ask-first, activity-render, `ActivityLog.statusText()`/`msSinceTaskStart()` sequences,
-   constants). Kotlin JVM parity tests (`ConciergeProtocolParityTest`, `ActivityLogParityTest`)
-   load the same files and assert the Kotlin port's output equals the fixture byte-for-byte — so
-   **TS↔Kotlin drift breaks a test, not a demo**. Regenerate fixtures by running the vitest file;
-   both suites are green (`npm run -w cloud-api concierge:fixtures` then `./gradlew
-:app:testDebugUnitTest`).
+1. **Cross-port parity fixtures — IMPLEMENTED.** The nudge strings, the activity log and the WS
+   protocol exist twice (TypeScript there, Kotlin here), and committed JSON fixtures in
+   `app/src/test/resources/parity/` are the seam: agent-event nudges including the prompt-injection
+   cases, ask-first, activity-render, `statusText()`/`msSinceTaskStart()` sequences on a fixed injected
+   clock, and the shared constants. They are generated by calling the server's real functions, so
+   `ConciergeProtocolParityTest` and `ActivityLogParityTest` replaying them here means **TS↔Kotlin drift
+   breaks a test, not a demo**. Refreshing them is a manual cross-repository copy — the README's
+   "Keeping the parity fixtures in sync" is the whole procedure, and nothing automated does it.
 2. **Kotlin JVM unit tests** — `app/src/test/…/saispike/` (run `./gradlew :app:testDebugUnitTest`):
    `ConciergeProtocolTest` (nudge helpers — choice≠approve/deny, link-only never voice-resolves,
    ask-first waits for availability, **prompt-injection fencing**), `ActivityLogTest` (elapsed/steps
@@ -305,8 +311,8 @@ Layered like the server (see [`TESTING_CONCIERGES.md`](https://github.com/simula
 4. **On-device audio checks** — Phase 0 gate (spoken exchange + barge-in), AEC sanity (model must
    not hear itself; verify with wired headphones if it does), SCO route + wideband check,
    route-loss drill.
-5. **Manual E2E voice smoke** per phase exit — the on-device checklist and E2E voice arc live
-   in [`TESTING_CONCIERGES.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/TESTING_CONCIERGES.md) §6; re-run prior phases' checks as regression.
+5. **Manual E2E voice smoke** per phase exit — [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) is the short
+   form kept here; re-run prior phases' checks as regression.
 
 ## 9. Open items
 
@@ -323,19 +329,20 @@ Layered like the server (see [`TESTING_CONCIERGES.md`](https://github.com/simula
   the display capability's on-glasses buttons (a hardware pivot, not a code change).
 - On-device E2E for Phases 1/2/4 checklists; 30-min screen-off battery soak.
 - `endCall`: playback-drained signal instead of the fixed 1.8s delay. (The hang-up-vs-work
-  question is decided: the model always asks whether to keep or stop running/queued work before
-  `endCall` — see [`VOICE_CONCIERGE.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/VOICE_CONCIERGE.md) §8.)
+  question is decided server-side and is not this app's to re-litigate: the persona contract requires
+  the model to ask whether to keep or stop running/queued work before `endCall`, interrupting first if
+  the answer is stop.)
 - Machine-switch: prompt staleness is handled (the `switchMachine` tool response carries a
   context update naming the new machine), but the fuzzy `contains` name match could still
   mis-target similar names.
 - Settings persistence: the **selected machine is persisted** (`Prefs`/SharedPreferences — picker,
   call start, and a voice `switchMachine` all update it, so it defaults on the next auto-login); the
-  voice-UX toggles (tap-to-talk, ask-first threshold) are still in-memory — add DataStore if they
-  should stick.
+  ask-first threshold is still in-memory — add DataStore if it should stick.
 - Cold start by voice needs a wake word (mic is off when the service isn't running); HUD status
   waits on display hardware; deferred completion ping (SMS/push) needs an out-of-band transport.
 - DAT SDK init is unconditional with errors swallowed — verify registration doesn't silently
   fail when permissions are missing.
 - ~~No client `watchdog` handler.~~ **Closed by deletion** — the server watchdog, both wire
-  messages and `ConciergeSocket.setWatchdog` are gone (VOICE_CONCIERGE §4). There is nothing to
-  handle, so the missing handler is no longer a latent bug.
+  messages and `ConciergeSocket.setWatchdog` are gone. There is nothing to handle, so the missing
+  handler is no longer a latent bug; the message tables in
+  [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md) §2 are the full set.

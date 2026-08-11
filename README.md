@@ -7,14 +7,11 @@ WebSocket; the glasses are the microphone, speaker and camera, reached through M
 Toolkit via the Meta AI companion app. Talk to Sai hands-free, hand work to an agent running on your
 own machine, and hear about it when it is done.
 
-The wire contract between this app and the server —
-`POST /v1/concierge/session`, the WS message tables, the close codes, and the five tools this client
-is obliged to answer itself — is documented in
-[`docs/CONCIERGE_CLIENT_PROTOCOL.md`](https://github.com/simular-ai/simular-pro-unified-ui/blob/main/docs/CONCIERGE_CLIENT_PROTOCOL.md)
-in the server repository.
-
 - [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md) — **start here to verify a build on real
   hardware.** Seven checks, ~15 minutes, each naming what it actually exercises.
+- [`docs/CONCIERGE_CLIENT_PROTOCOL.md`](docs/CONCIERGE_CLIENT_PROTOCOL.md) — the wire contract between
+  this app and the server: `POST /v1/concierge/session`, the WS message tables, the close codes, and
+  the five tools this client is obliged to answer itself.
 - [`docs/SAI_GLASSES_APP.md`](docs/SAI_GLASSES_APP.md) — this app's architecture: modules, call
   phases, DAT platform facts, dev runbook.
 
@@ -53,8 +50,8 @@ cd meta-android-app && ./gradlew :app:testDebugUnitTest --rerun
 
 `--rerun` matters. Without it the test task reports `UP-TO-DATE` from cache and verifies nothing.
 
-There is no CI here yet, so `gradlew` is the whole gate — 87 JVM tests across 13 classes, including
-the cross-port parity tests below.
+CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 97 JVM tests across
+14 classes, including the cross-port parity tests below. On-device and by-ear checks are still manual.
 
 ## Registration
 
@@ -88,7 +85,9 @@ The nudge strings, the activity log and the WS protocol are implemented twice �
 server, Kotlin here — and JSON fixtures in `meta-android-app/app/src/test/resources/parity/` are what
 keep the two ports honest. The Kotlin tests replay them; a drift fails a test.
 
-They are **generated in the server repository**, and this is the one procedure that crosses both:
+This is the one procedure that crosses both repositories, and **the only place this repo needs the
+server's** — the fixtures are generated from the TypeScript originals, so they cannot be refreshed from
+here:
 
 ```bash
 # in simular-pro-unified-ui
