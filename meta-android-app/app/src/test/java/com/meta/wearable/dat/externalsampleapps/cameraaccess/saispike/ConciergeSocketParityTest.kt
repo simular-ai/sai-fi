@@ -85,7 +85,7 @@ class ConciergeSocketParityTest {
     }
 
     // agent-event drives the model to react; agent-activity is display-only. Routing them to the same
-    // place is the bug this pins: an activity frame that nudges the model makes her narrate progress,
+    // place is the bug this pins: an activity frame that nudges the model makes it narrate progress,
     // which update discipline forbids.
     assertEquals(1, handleOne("agent-event").agentEvents.size)
     assertEquals(0, handleOne("agent-event").activity.size)

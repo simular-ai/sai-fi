@@ -46,9 +46,9 @@ class GeminiLiveClient(
     /**
      * Handle the local endCall tool: the user is done — end the call (client-side).
      *
-     * [spokeThisTurn] says whether she produced any speech in the turn that called it. The prompt
+     * [spokeThisTurn] says whether Sai produced any speech in the turn that called it. The prompt
      * requires a spoken goodbye BEFORE endCall, so a hang-up out of a silent turn is evidence that
-     * something other than a farewell got her here — see CallService's hang-up guard.
+     * something other than a farewell got it here — see CallService's hang-up guard.
      */
     private val onEndCall: (spokeThisTurn: Boolean) -> Unit,
     /**
@@ -85,8 +85,8 @@ class GeminiLiveClient(
   // Whether the CURRENT capture's outcome has already been relayed to the model (see the coalescing
   // note in handleToolCall — several tool calls can share one capture and one result).
   private val outcomeNudged = java.util.concurrent.atomic.AtomicBoolean(false)
-  // Did this turn hear the user, and did Sai answer? A turn with the first and not the second is her
-  // correctly ignoring speech that wasn't for her — worth a log line, since silence otherwise reads
+  // Did this turn hear the user, and did Sai answer? A turn with the first and not the second is Sai
+  // correctly ignoring speech that wasn't for it — worth a log line, since silence otherwise reads
   // as a fault. Reset at each turn boundary.
   @Volatile private var heardUserSinceLastTurn = false
   @Volatile private var spokeThisTurn = false
@@ -105,7 +105,7 @@ class GeminiLiveClient(
    */
   @Volatile private var saiTurn = ""
   @Volatile private var withheld = ""
-  /** A nudge in this turn explicitly asked her not to speak, so silence here is instructed, not judged. */
+  /** A nudge in this turn explicitly asked Sai not to speak, so silence here is instructed, not judged. */
   @Volatile private var silenceWasRequested = false
   private val heldTaskEffects = mutableListOf<JSONObject>()
   private val heldTaskNames = mutableListOf<String>()
@@ -253,8 +253,8 @@ class GeminiLiveClient(
         ready = true // client turns are deliverable from here (see injectNudge)
         onLog("live: setup complete — start talking")
         // BEFORE onReady: the greeting is injected from there, and a mute asserted while connecting
-        // has to reach the model first — otherwise she is told to greet, then told to be silent, and
-        // obeys the last thing she read. State first, then anything that was waiting on the session.
+        // has to reach the model first — otherwise Sai is told to greet, then told to be silent, and
+        // obeys the last thing it read. State first, then anything that was waiting on the session.
         sessionState?.let { injectNudge("${it.first} (re-asserted for this session)", it.second) }
         flushPreConnectNudges()
         onReady()
@@ -314,11 +314,11 @@ class GeminiLiveClient(
     // to look exactly like a swallowed utterance or a wedged session.
     //
     // It states the FACT and not a motive, because the first version guessed at one and guessed wrong:
-    // it read "stayed silent — judged it wasn't for her" over a turn where she had been explicitly
+    // it read "stayed silent — judged it wasn't for Sai" over a turn where Sai had been explicitly
     // TOLD to stay silent (the ask-first completion nudge) and then answered the user perfectly well
     // in the very next turn. A log line that invents a reason is worse than one that reports what
     // happened, so it now reports what happened — and says nothing at all when we know a nudge asked
-    // for the silence, since in that case the silence is ours, not hers.
+    // for the silence, since in that case the silence is ours, not Sai's.
     if (turnEnded) {
       // A withheld placeholder that never became speech: say so once, here, rather than per delta.
       // Silent suppression would trade a visible wrong line for an invisible one, and this is the
@@ -327,7 +327,7 @@ class GeminiLiveClient(
         onLog("✗ dropped a placeholder turn (\"${withheld.trim()}\") — not speech")
       }
       if (heardUserSinceLastTurn && !spokeThisTurn && !silenceWasRequested) {
-        onLog("— no reply to that (she may have judged it wasn't for her) —")
+        onLog("— no reply to that (Sai may have judged it wasn't meant for it) —")
       }
       heardUserSinceLastTurn = false
       spokeThisTurn = false
@@ -435,7 +435,7 @@ class GeminiLiveClient(
           val (effs, names) = released
           // One outcome, one nudge, however many calls coalesced onto this capture.
           if (!outcomeNudged.compareAndSet(false, true)) {
-            onLog("📷 outcome already relayed — not telling her twice")
+            onLog("📷 outcome already relayed — not telling Sai twice")
             return@onCaptureImage
           }
           if (ok) {
@@ -451,7 +451,7 @@ class GeminiLiveClient(
                     "[agent] The glasses photo landed and the task you queued has now started. Don't " +
                         "re-describe the photo — you haven't seen it, the task has."
                 else
-                    // Deliberately does NOT tell her to ask what to do with it: a photo with no request
+                    // Deliberately does NOT tell Sai to ask what to do with it: a photo with no request
                     // is the resting state of a clipboard, not a loose end to chase.
                     "[agent] The glasses photo landed. It is SAVED on the device and has NOT been sent " +
                         "anywhere — it goes only when a request carries it. Acknowledge in a few words " +
@@ -596,7 +596,7 @@ class GeminiLiveClient(
    * [kind] is a short tag for the log — "complete", "muted", "capture-retry". EVERY outcome is logged,
    * because a nudge has four of them (sent, held, dropped, discarded) and until now the log showed
    * none: an agent event appeared as `✓ done: …` and then whatever Sai said next, with no way to tell
-   * a nudge she ignored from one that never reached her. That gap is what made several reports
+   * a nudge Sai ignored from one that never reached it. That gap is what made several reports
    * unattributable — a muted call whose MUTED_NUDGE hit a null socket looked identical to the model
    * disregarding it.
    *
@@ -630,7 +630,7 @@ class GeminiLiveClient(
       return
     }
     // These are the nudges that ask for silence; a quiet turn after one of them is obedience, and
-    // must not be reported as her judging the speech wasn't for her.
+    // must not be reported as Sai judging the speech wasn't for it.
     if (kind.startsWith("muted") || kind.startsWith("complete (ask-first")) silenceWasRequested = true
     onLog("→ nudge: $kind")
     sendClientTurn(turns)
@@ -734,8 +734,8 @@ class GeminiLiveClient(
 
     // Always hands-free. Tap-to-talk (automatic VAD off, mic bracketed by activityStart/activityEnd)
     // was removed: with the VAD disabled the model only replies once the client sends activityEnd, so
-    // every exchange cost two taps and she could never answer while you were still talking. The tap now
-    // toggles MUTE instead (see CallService) — Sai always listens; the tap only decides if she speaks.
+    // every exchange cost two taps and Sai could never answer while you were still talking. The tap now
+    // toggles MUTE instead (see CallService) — Sai always listens; the tap only decides if it speaks.
     val activityDetection = JSONObject()
     run {
       // Use HIGH start-of-speech sensitivity so the model registers the user the

@@ -2,7 +2,7 @@
  * sai-fi — voice concierge.
  */
 
-// What to do with an agent event that warrants a reaction: say it now, hold it until she's audible,
+// What to do with an agent event that warrants a reaction: say it now, hold it until Sai is audible,
 // or drop it. A pure decision, so it can be tested without a device.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
@@ -20,7 +20,7 @@ sealed interface NudgeAction {
   /** A failed step, injected now, and the throttle window restarts from this moment. */
   data class InjectStepFailure(val nudge: String) : NudgeAction
 
-  /** Hold until she is audible again; [HeldNudgeQueue] collapses and replays these. */
+  /** Hold until Sai is audible again; [HeldNudgeQueue] collapses and replays these. */
   data class Hold(val kind: String, val nudge: String) : NudgeAction
 
   /** Deliberately not delivered. [why] is for the log — these are decisions, not losses. */
@@ -36,10 +36,10 @@ sealed interface NudgeAction {
  *
  *  - **Ask-first is about the USER's silence, not the task's duration.** The gate used to be how long
  *    the task took, which is a different question entirely: a 30-second email summary tripped it while
- *    the user was mid-sentence with her, so she was told "the user has been away a while — say NOTHING"
+ *    the user was mid-sentence with Sai, so Sai was told "the user has been away a while — say NOTHING"
  *    about someone who had just spoken, obeyed, and the result was never delivered.
  *  - **A failed step is throttled, not suppressed.** A long task can fail several steps while
- *    recovering; one nudge per failure floods the session until she blurts about it. One every 30s
+ *    recovering; one nudge per failure floods the session until Sai blurts about it. One every 30s
  *    carries the fact (there is no result yet, don't invent one) without a running commentary.
  *  - **Stale-by-nature events are dropped while muted rather than held.** A step failure and a "the
  *    machine is waking, about a minute" notice are both true for about a minute. Replayed on unmute
@@ -63,7 +63,7 @@ object AgentEventRouter {
       "progress" -> {
         if (!event.optBoolean("failed", false)) return NudgeAction.Ignore
         if (sinceLastStepFailureMs < stepFailureIntervalMs) {
-          return NudgeAction.Drop("step-failed — throttled (told her ${sinceLastStepFailureMs / 1000}s ago)")
+          return NudgeAction.Drop("step-failed — throttled (told Sai ${sinceLastStepFailureMs / 1000}s ago)")
         }
         if (muted) return NudgeAction.Drop("not holding step-failed while muted — it will be stale")
         return NudgeAction.InjectStepFailure(describeAgentEvent(event))
@@ -81,7 +81,7 @@ object AgentEventRouter {
 
     // The two completion wordings behave very differently — one says "report the result now", the other
     // "say nothing, wait for a gap, then offer it" — so the label has to name WHICH went out and why.
-    // Otherwise a completion the user never heard is indistinguishable from one she was correctly told
+    // Otherwise a completion the user never heard is indistinguishable from one Sai was correctly told
     // to sit on.
     val kind =
         when {

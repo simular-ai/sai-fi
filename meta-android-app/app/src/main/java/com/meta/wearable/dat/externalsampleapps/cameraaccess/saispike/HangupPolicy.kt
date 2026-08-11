@@ -18,7 +18,7 @@ sealed interface HangupAction {
   /** Hang up now. Muted, there is no goodbye to hear and nothing for the user to talk over. */
   data object EndNow : HangupAction
 
-  /** Do not hang up; ask instead. [why] is for the log, [nudge] is what she is told. */
+  /** Do not hang up; ask instead. [why] is for the log, [nudge] is what Sai is told. */
   data class HoldAndAsk(val why: String, val nudge: String) : HangupAction
 
   /**
@@ -48,11 +48,11 @@ sealed interface HangupAction {
  */
 object HangupPolicy {
   /**
-   * @param spokeThisTurn she produced audio during the turn that called `endCall`
+   * @param spokeThisTurn Sai produced audio during the turn that called `endCall`
    * @param lastUserSpeechAt elapsed-realtime ms of the user's last utterance, 0 if never
-   * @param lastSaiSpeechAt elapsed-realtime ms of her last utterance, 0 if never
-   * @param lastSaiText her last utterance, used only to tell "spoke" from "emitted nothing"
-   * @param muted the user has muted her, so nothing she says can be heard
+   * @param lastSaiSpeechAt elapsed-realtime ms of Sai's last utterance, 0 if never
+   * @param lastSaiText Sai's last utterance, used only to tell "spoke" from "emitted nothing"
+   * @param muted the user has muted Sai, so nothing it says can be heard
    * @param guardUsed the hold has already fired once this call
    */
   fun decide(
@@ -63,7 +63,7 @@ object HangupPolicy {
       muted: Boolean,
       guardUsed: Boolean,
   ): HangupAction {
-    // "She said goodbye" is either audio in THIS turn, or a previous utterance that came after the
+    // "Sai said goodbye" is either audio in THIS turn, or a previous utterance that came after the
     // user last spoke — the shape of an answered farewell. Text matters as well as timing: an empty
     // last utterance is a turn that produced nothing, not a sign-off.
     val saidGoodbye = spokeThisTurn || (lastSaiSpeechAt > lastUserSpeechAt && lastSaiText.isNotBlank())
@@ -75,7 +75,7 @@ object HangupPolicy {
 
     val why =
         if (!userAsked) "the user hasn't said anything this call"
-        else "she hasn't spoken since the user's last turn — no goodbye"
+        else "Sai hasn't spoken since the user's last turn — no goodbye"
     if (muted) return HangupAction.HoldSilently(why)
     return HangupAction.HoldAndAsk(why, UNCONFIRMED_NUDGE)
   }
@@ -85,7 +85,7 @@ object HangupPolicy {
    *
    * [stragglerGuardMs] exists because transcription for the utterance that PRODUCED the goodbye can
    * still be arriving when the window opens. Cancelling on that would make a genuine "hang up"
-   * impossible: her own farewell would keep re-opening the call.
+   * impossible: its own farewell would keep re-opening the call.
    *
    * @param openedAt when the goodbye window opened, 0 if no hangup is pending
    */
@@ -94,7 +94,7 @@ object HangupPolicy {
     return now - openedAt >= stragglerGuardMs
   }
 
-  /** Told to her when a hang-up is held back: the call is still open, so ask rather than assume. */
+  /** Told to Sai when a hang-up is held back: the call is still open, so ask rather than assume. */
   const val UNCONFIRMED_NUDGE =
       "[system] You called endCall, but you had not said goodbye and nothing the user said asked " +
           "you to hang up — so the call is STILL OPEN and nothing was ended. If you think you " +
@@ -102,7 +102,7 @@ object HangupPolicy {
           "want you to hang up (\"did you want me to hang up?\") and wait for their answer. Do not " +
           "say goodbye and do not call endCall again unless they say yes."
 
-  /** Told to her when the user talked over the goodbye window: carry on, do not sign off twice. */
+  /** Told to Sai when the user talked over the goodbye window: carry on, do not sign off twice. */
   const val CANCELLED_NUDGE =
       "[system] You were about to hang up, but the user carried on talking, so the call is STILL " +
           "OPEN. Do not say goodbye again and do not end the call unless they clearly tell you to. " +

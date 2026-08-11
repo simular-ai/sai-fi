@@ -445,7 +445,7 @@
       // ONLY SAI IS PLAYED. The room can hear the wearer with its own ears, so playing their mic back
       // through the laptop was both redundant and actively harmful: their voice, delayed, into the air
       // a metre from the glasses mic that produced it. That is an acoustic loop, and the server VAD
-      // cannot tell it from a person talking — so it barged in on Sai and she stopped mid-sentence.
+      // cannot tell it from a person talking — so it barged in on Sai and Sai stopped mid-sentence.
       // The mic stream still arrives and still drives the waveform; it is just never scheduled.
       //
       // MAX_LEAD is the "we are behind, resync" guard, and it used to be 0.4 s in BOTH directions.
@@ -574,7 +574,7 @@
       /**
        * The user barged in: drop everything still queued, exactly as the phone does. Without this the
        * dashboard plays on past the interrupt, so the room hears the tail of the cut-off sentence and
-       * then the new answer — which reads as Sai repeating herself.
+       * then the new answer — which reads as Sai repeating itself.
        */
       function cancelScheduled() {
         for (const s of Object.values(streams)) {
@@ -705,7 +705,7 @@
             chip.textContent = m.paused ? 'PAUSED' : 'MUTED'
             chip.dataset.state = m.paused ? 'paused' : 'muted'
           } else if (m.t === 'interrupted') {
-            // The wearer talked over her. Drop what we have queued so the room stops when they did.
+            // The wearer talked over Sai. Drop what we have queued so the room stops when they did.
             cancelScheduled()
           } else if (m.t === 'publisher-gone') {
             $('dot').classList.remove('on')

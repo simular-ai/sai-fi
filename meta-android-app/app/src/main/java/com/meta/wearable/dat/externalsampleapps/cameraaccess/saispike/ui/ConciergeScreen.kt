@@ -457,7 +457,7 @@ fun ConciergeScreen(ui: VoiceConciergeActivity) {
                 modifier = Modifier.weight(1f).height(48.dp),
             ) {
               // Mic icons rather than transport icons: pause/resume here is about whether Sai can
-              // HEAR you, not about playback. A ▶/❚❚ pair reads as "pause the audio she's speaking",
+              // HEAR you, not about playback. A ▶/❚❚ pair reads as "pause the audio Sai is speaking",
               // which is what Mute does.
               Icon(
                   if (s.paused) Icons.Filled.Mic else Icons.Filled.MicOff,
@@ -490,11 +490,11 @@ fun ConciergeScreen(ui: VoiceConciergeActivity) {
             s.paused ->
                 Hint(
                     "Paused — the mic is off, so Sai hears nothing. A long pause ends the call." +
-                        if (s.saiMuted) " She'll come back muted when you resume." else "",
+                        if (s.saiMuted) " Sai will come back muted when you resume." else "",
                 )
             s.saiMuted ->
                 Hint(
-                    "Muted — Sai still hears you and keeps working, she just won't speak. " +
+                    "Muted — Sai still hears you and keeps working, it just won't speak. " +
                         "Anything that finishes while muted is held and offered after you unmute.",
                 )
           }

@@ -47,8 +47,8 @@ class ActivityLog(
    *
    * Three distinguishable states, because collapsing them is how the honesty bugs happen: work is
    * RUNNING, or it is blocked on the USER, or it is accepted and NOT STARTED. "Still working" said
-   * about a turn parked on an unanswered question is the 2026-07-31 failure (she reported waiting on
-   * a third party for a question she had asked herself), and "still working" said about a queued
+   * about a turn parked on an unanswered question is the 2026-07-31 failure (Sai reported waiting on
+   * a third party for a question it had asked itself), and "still working" said about a queued
    * task is the same lie one step earlier.
    */
   fun statusText(): String {

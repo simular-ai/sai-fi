@@ -28,7 +28,7 @@ class HangupPolicyTest {
   // ── the call ends ─────────────────────────────────────────────────────────────────────────────
 
   @Test
-  fun `she spoke this turn and the user has talked — end after the goodbye lands`() {
+  fun `Sai spoke this turn and the user has talked — end after the goodbye lands`() {
     assertEquals(
         HangupAction.EndAfterGoodbye,
         decide(spokeThisTurn = true, lastUserSpeechAt = 5_000L),
@@ -61,11 +61,11 @@ class HangupPolicyTest {
   }
 
   @Test
-  fun `she has not spoken since the user's last turn — no goodbye was answered`() {
+  fun `Sai has not spoken since the user's last turn — no goodbye was answered`() {
     val action = decide(lastUserSpeechAt = 9_000L, lastSaiSpeechAt = 4_000L, lastSaiText = "sure")
     assertTrue(action is HangupAction.HoldAndAsk)
     assertEquals(
-        "she hasn't spoken since the user's last turn — no goodbye",
+        "Sai hasn't spoken since the user's last turn — no goodbye",
         (action as HangupAction.HoldAndAsk).why,
     )
   }
@@ -111,7 +111,7 @@ class HangupPolicyTest {
   }
 
   @Test
-  fun `the cancelled nudge tells her not to sign off twice`() {
+  fun `the cancelled nudge tells Sai not to sign off twice`() {
     assertTrue(HangupPolicy.CANCELLED_NUDGE.startsWith("[system]"))
     assertTrue(HangupPolicy.CANCELLED_NUDGE.contains("STILL OPEN"))
     assertTrue(HangupPolicy.CANCELLED_NUDGE.contains("Do not say goodbye again"))
@@ -128,7 +128,7 @@ class HangupPolicyTest {
 
   @Test
   fun `speech inside the straggler guard is the goodbye's own transcription, not a barge-in`() {
-    // Cancelling on this would make a genuine "hang up" impossible: her farewell reopens the call.
+    // Cancelling on this would make a genuine "hang up" impossible: its own farewell reopens the call.
     assertEquals(
         false, HangupPolicy.shouldCancel(openedAt = 10_000L, now = 10_300L, stragglerGuardMs = 600L))
   }

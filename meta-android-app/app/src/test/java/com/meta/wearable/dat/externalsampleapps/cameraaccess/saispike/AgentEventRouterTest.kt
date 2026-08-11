@@ -40,7 +40,7 @@ class AgentEventRouterTest {
   // ── ask-first: about the USER's silence, not the task's duration ───────────
   //
   // The gate used to measure how long the TASK took, which is a different question. A 30-second email
-  // summary tripped it while the user was mid-sentence with her, so she was told "the user has been
+  // summary tripped it while the user was mid-sentence with Sai, so Sai was told "the user has been
   // away a while — say NOTHING", obeyed, and the result was never delivered.
 
   @Test
@@ -54,7 +54,7 @@ class AgentEventRouterTest {
   fun `a completion is offered rather than announced when the user has gone quiet`() {
     val action = route(complete(), userQuietMs = THRESHOLD + 1)
     assertTrue(action.toString(), action is NudgeAction.Inject)
-    // The label must name WHY, or a result the user never heard is indistinguishable from one she was
+    // The label must name WHY, or a result the user never heard is indistinguishable from one Sai was
     // correctly told to sit on.
     assertTrue((action as NudgeAction.Inject).kind, action.kind.contains("ask-first"))
   }
@@ -68,7 +68,7 @@ class AgentEventRouterTest {
   // ── muted ─────────────────────────────────────────────────────────────────
 
   @Test
-  fun `a completion while muted is held, not spoken into a room she was told to be quiet in`() {
+  fun `a completion while muted is held, not spoken into a room Sai was told to be quiet in`() {
     val action = route(complete(), muted = true)
     assertTrue(action.toString(), action is NudgeAction.Hold)
     assertEquals("complete", (action as NudgeAction.Hold).kind)
@@ -98,13 +98,13 @@ class AgentEventRouterTest {
   fun `the first failed step goes out`() {
     val action = route(progress(failed = true))
     assertTrue(action.toString(), action is NudgeAction.InjectStepFailure)
-    // It has to carry the fact that there is no result yet, or she invents one.
+    // It has to carry the fact that there is no result yet, or Sai invents one.
     assertTrue((action as NudgeAction.InjectStepFailure).nudge.isNotEmpty())
   }
 
   /**
    * A long task can fail several steps while recovering. One nudge per failure floods the session until
-   * she blurts about it; one every 30s carries the fact without a running commentary. The suppressed
+   * Sai blurts about it; one every 30s carries the fact without a running commentary. The suppressed
    * ones are still named, so the log shows they happened.
    */
   @Test

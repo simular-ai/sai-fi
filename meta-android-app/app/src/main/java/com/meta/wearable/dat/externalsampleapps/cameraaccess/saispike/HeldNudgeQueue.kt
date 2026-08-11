@@ -2,11 +2,11 @@
  * sai-fi — voice concierge (muted-call nudge holding).
  */
 
-// HeldNudgeQueue — what Sai would have said while muted, kept until she can be heard again.
+// HeldNudgeQueue — what Sai would have said while muted, kept until it can be heard again.
 //
-// While muted the client drops her audio, so injecting a nudge that makes her speak would burn the
-// result: she'd say it to nobody and the agent event is not repeated. So we hold those nudges and
-// replay them on unmute (CallService injects them, using the ask-first wording for completions so she
+// While muted the client drops its audio, so injecting a nudge that makes it speak would burn the
+// result: Sai would say it to nobody and the agent event is not repeated. So we hold those nudges and
+// replay them on unmute (CallService injects them, using the ask-first wording for completions so it
 // waits for a natural gap rather than blurting).
 //
 // The collapsing rules exist so unmuting produces ONE short offer, not a monologue:
@@ -23,7 +23,7 @@ class HeldNudgeQueue(private val max: Int = 5) {
 
   private val items = mutableListOf<Held>()
 
-  /** True for the event kinds worth waking the user for the moment she's audible again. */
+  /** True for the event kinds worth waking the user for the moment Sai is audible again. */
   private fun urgent(kind: String) = kind == "approval-request" || kind == "error"
 
   /**

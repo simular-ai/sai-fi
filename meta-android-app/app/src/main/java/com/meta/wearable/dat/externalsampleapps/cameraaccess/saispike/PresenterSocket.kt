@@ -194,8 +194,8 @@ class PresenterSocket(
   /**
    * The user barged in — tell the dashboard to drop what it has queued, the way the phone flushes its
    * own playback. Sent even though audio publishing is fire-and-forget: without it the room hears the
-   * tail of a sentence Sai was already cut off in, followed by her next answer, which sounds like her
-   * repeating herself.
+   * tail of a sentence Sai was already cut off in, followed by its next answer, which sounds like
+   * Sai repeating itself.
    */
   fun interrupted() = sendJson(JSONObject().put("t", "interrupted"))
 

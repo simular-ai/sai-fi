@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * While Sai is muted, a nudge that would make her speak has to be held — injected then, she'd say the
- * result to nobody and the agent event never repeats, so it would be lost outright.
+ * While Sai is muted, a nudge that would make it speak has to be held — injected then, Sai would
+ * say the result to nobody and the agent event never repeats, so it would be lost outright.
  *
  * What's worth pinning is the collapsing: unmuting must produce ONE short offer, never a backlog
  * monologue. That was the risk called out when this was designed.

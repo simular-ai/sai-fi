@@ -83,9 +83,9 @@ object CallController {
       val routeStatus: String = "",
       val machineLabel: String? = null,
       val machineId: String? = null,
-      /** Sai is silenced: she still hears and works, she just doesn't speak. Every call starts false. */
+      /** Sai is silenced: it still hears and works, it just doesn't speak. Every call starts false. */
       val saiMuted: Boolean = false,
-      /** The mic + Live session are down (Pause). Distinct from muting, which keeps her listening. */
+      /** The mic + Live session are down (Pause). Distinct from muting, which keeps Sai listening. */
       val paused: Boolean = false,
       /**
        * A socket the call depends on is down and retrying — the Live session, the concierge WS, or
@@ -135,10 +135,10 @@ object CallController {
   /** Manual photo capture: attach a glasses photo to the next forwarded task. */
   fun capturePhoto(context: Context) = send(context, CallService.ACTION_CAPTURE)
 
-  /** Silence Sai / let her speak again (mirrors the glasses temple tap). She keeps listening either way. */
+  /** Silence Sai / let it speak again (mirrors the glasses temple tap). Sai keeps listening either way. */
   fun toggleMute(context: Context) = send(context, CallService.ACTION_TOGGLE_MUTE)
 
-  /** Pause/resume the mic + Live session. Unlike muting, this stops her hearing anything. */
+  /** Pause/resume the mic + Live session. Unlike muting, this stops Sai hearing anything. */
   fun togglePause(context: Context) = send(context, CallService.ACTION_TOGGLE_PAUSE)
 
   /** Mid-call VM switch (same concierge WS reconnect as the voice switchMachine tool). */
@@ -230,7 +230,7 @@ object CallController {
    * mirror can republish it.
    *
    * Straggler audio is discarded for a beat after an interrupt, but transcript deltas keep arriving,
-   * so a half-spoken sentence sat in the log reading exactly like something she finished saying. Null
+   * so a half-spoken sentence sat in the log reading exactly like something Sai finished saying. Null
    * when nothing was streaming, when the entry is Sai's own but empty, or when it's the user's turn
    * (the user isn't the one being cut off).
    */

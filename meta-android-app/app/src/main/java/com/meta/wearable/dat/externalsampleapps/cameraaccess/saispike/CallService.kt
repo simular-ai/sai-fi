@@ -90,7 +90,7 @@ class CallService : Service() {
   @Volatile private var currentMachineId = ""
   @Volatile private var currentMachineLabel = ""
   @Volatile private var useGlasses = false
-  // Sai is silenced: her audio is dropped and speech-producing nudges are held. She keeps listening
+  // Sai is silenced: its audio is dropped and speech-producing nudges are held. Sai keeps listening
   // and working. Call-scoped — every call starts unmuted.
   /**
    * Sai is silenced but still listening. WRITTEN only on the main thread — both callers reach
@@ -115,11 +115,11 @@ class CallService : Service() {
    */
   @Volatile private var lastUserSpeechAt = 0L
   /**
-   * The last thing each side actually said, and when she last said anything — the evidence an
+   * The last thing each side actually said, and when Sai last said anything — the evidence an
    * `endCall` needs to be judged by.
    *
    * A call once ended with `⏻ endCall` and no farewell from either side: no `you:` line at all, right
-   * after a mute and a barge-in. The log couldn't say what she thought she heard, so the cause stayed a
+   * after a mute and a barge-in. The log couldn't say what Sai thought it heard, so the cause stayed a
    * guess between a mishearing and a turn left in a strange state. Both of those are visible in these
    * two lines, so `endCall` now names them.
    */
@@ -134,7 +134,7 @@ class CallService : Service() {
    * fires once, and a second endCall is honoured whatever it looks like.
    */
   @Volatile private var hangupGuardUsed = false
-  /** When she was last told a step failed (elapsedRealtime), so the telling can't become chatter. */
+  /** When Sai was last told a step failed (elapsedRealtime), so the telling can't become chatter. */
   @Volatile private var lastStepFailureNudgeAt = 0L
   // Voice hangup in progress: when the goodbye window opened (elapsedRealtime), 0 when none is open.
   // The window is cancellable — see endCallByVoice / cancelHangupIfPending.
@@ -247,7 +247,7 @@ class CallService : Service() {
     startPresenter()
 
     // Glasses temple button: tap → mute/unmute Sai, tap-and-hold (session STOPPED) → end. Tap used to
-    // pause/resume; muting is what you actually want mid-conversation (she keeps listening and working),
+    // pause/resume; muting is what you actually want mid-conversation (Sai keeps listening and working),
     // and pause/resume moved to an on-screen button. Best-effort — no-ops if no glasses registered.
     gesture =
         GlassesGestureSession(
@@ -296,7 +296,7 @@ class CallService : Service() {
             // Full-duplex on both routes: model TTS plays over the live comm path (SCO on glasses)
             // while the mic stays open, so voice barge-in works everywhere.
             onAudio = {
-              // Muted: she still generates (and we still transcribe to the phone log), but not a sample
+              // Muted: Sai still generates (and we still transcribe to the phone log), but not a sample
               // reaches the glasses OR the dashboard. Gated here rather than in GeminiLiveClient on
               // purpose — suppressing at the decode site would skip `modelSpeaking`, and the nudge
               // gating would then think the turn was idle while audio was still arriving.
@@ -389,7 +389,7 @@ class CallService : Service() {
     // Muted, there is no greeting to give. GREETING_NUDGE says "greet the user first, don't wait for
     // them to speak" — the exact opposite of the MUTED_NUDGE sent a line earlier, and the model obeys
     // whichever it read last, which is why a call muted before it connected still opened with "Hello!
-    // I'm here and ready to help". Consume the gate anyway: a greeting delivered whenever she happens
+    // I'm here and ready to help". Consume the gate anyway: a greeting delivered whenever Sai happens
     // to be unmuted, minutes into a call, is worse than no greeting at all.
     if (saiMuted) {
       log("→ nudge: greeting — skipped (muted at connect)")
@@ -399,8 +399,8 @@ class CallService : Service() {
   }
 
   /**
-   * Silence Sai / let her speak again — the temple tap, the on-screen button and the notification
-   * action all land here. She keeps listening and working either way; only her voice is affected.
+   * Silence Sai / let it speak again — the temple tap, the on-screen button and the notification
+   * action all land here. Sai keeps listening and working either way; only its voice is affected.
    */
   private fun toggleMute() {
     // Paused, there is no Live session to silence or un-silence: the flag would flip with no audible
@@ -431,7 +431,7 @@ class CallService : Service() {
   }
 
   /**
-   * While muted, a nudge that would make her speak is a nudge spoken into the void — the result would
+   * While muted, a nudge that would make Sai speak is a nudge spoken into the void — the result would
    * be lost for good. Hold it instead, and replay on unmute.
    *
    * Held items collapse: only the newest `complete` survives (an older one is superseded), and progress
@@ -700,7 +700,7 @@ class CallService : Service() {
     log(
         "⏻ endCall evidence — last you ($userAgo): \"${excerpt(lastUserText)}\" | " +
             "last sai: \"${excerpt(lastSaiText)}\"" +
-            (if (spokeThisTurn) " | she spoke in this turn" else " | she said nothing in this turn"),
+            (if (spokeThisTurn) " | Sai spoke in this turn" else " | Sai said nothing in this turn"),
     )
     when (val action =
         HangupPolicy.decide(
@@ -750,7 +750,7 @@ class CallService : Service() {
    * The user spoke while we were winding down, so they were not done — abort the hangup.
    *
    * Two triggers, because either can be the only one available: a barge-in over the goodbye (the
-   * precise signal, but it needs her to still be speaking), and any fresh speech after a short guard.
+   * precise signal, but it needs Sai to still be speaking), and any fresh speech after a short guard.
    * The guard exists because transcription for the utterance that PRODUCED the goodbye can still be
    * arriving when the window opens; cancelling on that would make a genuine "hang up" impossible.
    */
@@ -885,7 +885,7 @@ class CallService : Service() {
             },
             // Context, not speech — injected as sent, with no "say this verbatim" wrapper. Not held
             // while muted: it corrects a belief the model would otherwise act on (that its rejected
-            // choice went through), and MUTED_NUDGE already governs whether she says anything about it.
+            // choice went through), and MUTED_NUDGE already governs whether Sai says anything about it.
             onInstruct = { text -> live?.injectNudge("instruct", text) },
             onApprovalTimeout = { live?.injectNudge("approval-timeout", APPROVAL_TIMEOUT_NUDGE) },
             // Permanent WS-upgrade rejection — the Live audio session may still be up, so let the model
@@ -1071,7 +1071,7 @@ class CallService : Service() {
     log("📷 capture requested by: UI button (${SystemClock.elapsedRealtime() - callStartedAt}ms into the call)")
     captureAndAttach { ok, result ->
       if (ok) {
-        // Acknowledge, don't interrogate. The old nudge told her to ASK what to do with the photo,
+        // Acknowledge, don't interrogate. The old nudge told Sai to ASK what to do with the photo,
         // which turned taking a picture into a conversation the user didn't start. It's a clipboard:
         // the photo waits until a request carries it. The thumbnail on the phone is the real feedback.
         live?.injectNudge(
@@ -1133,7 +1133,7 @@ class CallService : Service() {
    * Hand over the context and then the effects, with no suspension in between.
    *
    * Every `return` path still calls sendEffects: a request whose context couldn't be gathered is
-   * still the user's request, and dropping it would strand them silently. What changes is what she
+   * still the user's request, and dropping it would strand them silently. What changes is what Sai
    * is told about it.
    */
   private fun sendEffectsNow(
@@ -1148,7 +1148,7 @@ class CallService : Service() {
       }
       is PhoneLocation.Result.Failure -> {
         // Same shape as the missing-photo case below, and for the same reason: the task IS running,
-        // so "nothing happened" would be false — but she must not paper over the gap by naming a
+        // so "nothing happened" would be false — but Sai must not paper over the gap by naming a
         // place. An invented city is the location-shaped version of answering "what am I looking at?"
         // from the remote desktop.
         val hint =
@@ -1179,7 +1179,7 @@ class CallService : Service() {
         // an UNRELATED request riding the photo, and the flag is what distinguishes the two. Clearing
         // it meant a deliberate follow-up about the same picture ("what's up with the photo?", "the one
         // you attached just now") landed in the branch below and was answered "none has been taken this
-        // call" — false, twice in one call, after which she offered to take a photo that was already
+        // call" — false, twice in one call, after which Sai offered to take a photo that was already
         // sitting on the phone and already with the agent.
         val again = attachmentSent
         attachmentSent = true
@@ -1187,14 +1187,14 @@ class CallService : Service() {
         CallController.update { st ->
           st.copy(capture = st.capture?.copy(sent = CallController.Sent.SENT))
         }
-        if (again) log("📷 re-attached the same photo (she asked for it again)")
+        if (again) log("📷 re-attached the same photo (Sai asked for it again)")
         else log("📷 sent the held photo with this request")
       } else {
         // Asked to attach with genuinely nothing on the clipboard — no capture has succeeded this call.
-        // The request still goes — dropping it would strand the user's actual ask — but she must not
+        // The request still goes — dropping it would strand the user's actual ask — but Sai must not
         // imply the agent can see a picture that was never taken. Say the request went WITHOUT one, so
-        // her own reply and this correction agree: if the nudge said "nothing happened" while the task
-        // was running, she'd contradict herself.
+        // its own reply and this correction agree: if the nudge said "nothing happened" while the task
+        // was running, it would contradict itself.
         log("📷 attach requested but nothing captured this call — sent without a photo")
         live?.injectNudge(
             "attach-without-photo",
@@ -1254,7 +1254,7 @@ class CallService : Service() {
     // Publish the FULL accumulated text with its stable id, so the dashboard upserts the same turn in
     // place instead of re-deriving deltas.
     val isSai = entry.kind != CallController.Kind.YOU
-    // Muted, what she generates is junk she would have said — the mute design always specified it
+    // Muted, what Sai generates is junk it would have said — the mute design always specified it
     // stays in the phone's log and off the dashboard. It was never gated, so the room got a stream of
     // near-empty SAI turns instead. YOU turns keep publishing: the room should still see the wearer.
     if (isSai && saiMuted) return
@@ -1266,7 +1266,7 @@ class CallService : Service() {
    * Mark the streaming transcript entry as cut off at a barge-in.
    *
    * Straggler AUDIO is discarded for a beat, but transcript deltas keep arriving, so a half-spoken
-   * sentence used to sit in the log looking like something she actually finished saying.
+   * sentence used to sit in the log looking like something Sai actually finished saying.
    */
   private fun markTurnCutOff() {
     val entry = CallController.markLiveTurnCutOff() ?: return

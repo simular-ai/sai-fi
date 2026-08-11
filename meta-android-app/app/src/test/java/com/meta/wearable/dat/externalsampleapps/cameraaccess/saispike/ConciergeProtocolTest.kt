@@ -47,8 +47,8 @@ class ConciergeProtocolTest {
   }
 
   /**
-   * A failed step is the one kind of progress she must be told about, and it must not make her speak.
-   * Device 2026-07-30: `tool execution failed` reached nobody, and she invented a weather report.
+   * A failed step is the one kind of progress Sai must be told about, and it must not make it speak.
+   * Device 2026-07-30: `tool execution failed` reached nobody, and Sai invented a weather report.
    */
   @Test
   fun failedStep_isContextNotSpeech_andStillFenced() {
