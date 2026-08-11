@@ -132,7 +132,7 @@ effects, exactly as `attachLatestImage` does for a photo. Neither flag reaches t
 `parseEffect` ignores unknown fields — so both are purely client-side signalling. Unlike the photo
 there is no clipboard: the fix is read at send time, because freshness is the point and there is no
 user action to hold. When no fix is available the request **still goes**, and a
-`location-unavailable` nudge tells her to say so rather than name a city. **Manual capture** exists
+`location-unavailable` nudge tells it to say so rather than name a city. **Manual capture** exists
 too: the in-call "📷 Attach photo"
 button (`ACTION_CAPTURE` → `manualCapture()`) runs the same capture/upload/stash plumbing and
 tells the model via a context nudge — for when the _user_ wants a specific view attached without
@@ -180,7 +180,7 @@ naming, pruned the CameraAccess sample UI, `MainActivity` slimmed to a callback 
   device. Tuned VAD only stops bystanders from _triggering_ Sai; it does not stop their voices being
   captured and sent. The narrowing option this doc used to name was **tap-to-talk, and it has been
   removed** (with the VAD off the model only replied on `activityEnd`, so every exchange cost two taps
-  and she could never answer while you were still talking — the tap now toggles mute). **Mute is not a
+  and Sai could never answer while you were still talking — the tap now toggles mute). **Mute is not a
   replacement:** it silences Sai's output and leaves the mic wide open, so exactly as much bystander
   audio reaches Google. The only control that actually stops capture today is **Pause**, which drops
   the mic and the Live session outright — a manual, all-or-nothing switch, not the per-turn gating this
@@ -310,7 +310,8 @@ Layered the same way the server's own suite is — deterministic first, by-ear l
    scripted agent-event→nudge→effects round trip, single-flight Live re-mint, WS drop recovery.
 4. **On-device audio checks** — Phase 0 gate (spoken exchange + barge-in), AEC sanity (model must
    not hear itself; verify with wired headphones if it does), SCO route + wideband check,
-   route-loss drill.
+   route-loss drill. Check 7 of [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) is the by-ear form of the
+   first two, including the three ways a barge-in fails and which layer each one implicates.
 5. **Manual E2E voice smoke** per phase exit — [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) is the short
    form kept here; re-run prior phases' checks as regression.
 
@@ -319,8 +320,9 @@ Layered the same way the server's own suite is — deterministic first, by-ear l
 - **SCO full-duplex validation (on-device, by ear):** confirm the model's TTS is intelligible
   and loud enough over the mono SCO link on real glasses, and — critically — that the
   always-live mic + platform AEC keep the model from hearing its own SCO playback and
-  self-interrupting (verify with the AEC sanity check; wired headphones isolate an AEC fault).
-  Also confirm the `endCall` goodbye (still behind the fixed 1.8 s delay) lands before teardown.
+  self-interrupting (check 7 of [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) is the drill; wired
+  headphones on the phone route isolate an AEC fault). Also confirm the `endCall` goodbye (still
+  behind the fixed 1.8 s delay) lands before teardown — check 8 there.
 - Confirm a **capability-less DAT session delivers temple gestures** (the docs describe gesture
   handling "during an active stream/session"; fallback: attach a throwaway camera stream to keep
   the session live — which the capture stream doubles as). This is the _only_ open gesture

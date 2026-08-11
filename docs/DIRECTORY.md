@@ -37,7 +37,7 @@ server (the agent link), and does almost nothing else itself.
 | --- | --- |
 | `SAI_GLASSES_APP.md` | The architecture overview — read this first. |
 | `CONCIERGE_CLIENT_PROTOCOL.md` | The client half of the wire contract (endpoints, WS message tables, close codes, the device tools). Vendored here so the repo is self-contained. |
-| `ON_DEVICE_CHECK.md` | A runnable checklist for verifying a build on real glasses. |
+| `ON_DEVICE_CHECK.md` | A runnable checklist for verifying a build on real glasses — eight checks, each naming what it exercises and how it fails. |
 | `DIRECTORY.md` | This file. |
 
 ---

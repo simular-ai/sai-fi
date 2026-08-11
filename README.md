@@ -14,8 +14,8 @@ own machine, and hear about it when it is done.
 - [`docs/CONCIERGE_CLIENT_PROTOCOL.md`](docs/CONCIERGE_CLIENT_PROTOCOL.md) — the wire contract between
   this app and the server: `POST /v1/concierge/session`, the WS message tables, the close codes, and
   the five tools this client is obliged to answer itself.
-- [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md) — **verify a build on real hardware.** Seven
-  checks, ~15 minutes, each naming what it actually exercises.
+- [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md) — **verify a build on real hardware.** Eight
+  checks, ~25 minutes, each naming what it actually exercises.
 
 ## Prerequisites
 
