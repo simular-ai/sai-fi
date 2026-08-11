@@ -11,7 +11,7 @@
   resource way instead: this file declares the light parent and values-night/ declares the dark one
   under the same style name. The flash then matches whichever mode SaiTheme is about to render.
 
-  Values here are duplicated from ui/theme/Color.kt on purpose: XML can't read Compose Colors. Keep
+  Values here are duplicated from ui/theme/Theme.kt on purpose: XML can't read Compose Colors. Keep
   them in step — both trace back to the `background` token in the desktop app's base.css.
 -->
 <resources>

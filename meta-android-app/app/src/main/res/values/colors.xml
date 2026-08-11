@@ -6,6 +6,6 @@
     <color name="ic_launcher_background">#16D342</color>
 
     <!-- Cold-start window background only — Compose takes over a frame later. The `background` token
-         (light) from base.css; mirrors Light.background in ui/theme/Color.kt. values-night/ has dark. -->
+         (light) from base.css; mirrors L.background in ui/theme/Theme.kt. values-night/ has dark. -->
     <color name="sai_window_background">#F9FAF5</color>
 </resources>

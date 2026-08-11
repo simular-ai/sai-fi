@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The `background` token from base.css `.dark`; mirrors Dark.background in ui/theme/Color.kt. -->
+    <!-- The `background` token from base.css `.dark`; mirrors D.background in ui/theme/Theme.kt. -->
     <color name="sai_window_background">#0C0C0C</color>
 </resources>
