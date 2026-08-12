@@ -5,9 +5,9 @@ find the thing you care about without reading the whole tree. For *why* the app 
 way, read [`SAI_GLASSES_APP.md`](SAI_GLASSES_APP.md); for the *wire contract* it must honour,
 read [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md).
 
-**One sentence on the app:** a thin Android app that puts a voice concierge on Meta Ray-Ban
-glasses — it opens a Gemini Live audio session (client-side, direct) and a WebSocket to the
-server (the agent link), and does almost nothing else itself.
+**One sentence on the app:** an Android app that puts a voice concierge on Meta Ray-Ban glasses — it
+opens a Gemini Live audio session directly with the user's own key, runs the conversation's state
+machine itself, and talks to Sai's cloud-api only to reach the agent.
 
 ## Where to start reading
 
@@ -82,9 +82,12 @@ below — the path still carries the app's earlier name).
 
 | File (`…/saispike/`) | What it does |
 | --- | --- |
-| `ConciergeClient.kt` | HTTP calls: mint a session, list machines, recall history, upload. |
-| `ConciergeSocket.kt` | The `/v1/concierge/ws` WebSocket: effects up, agent-events/speak/instruct down, reconnect, cost-guard closes. |
-| `ConciergeProtocol.kt` | Kotlin port of the server's nudge/message logic (kept honest by parity fixtures). |
+| `ConciergeClient.kt` | HTTP calls: list machines, recall history, upload. |
+| `VoiceChannelClient.kt` | The `/v1/voice/*` surface: `POST /message`, the SSE `GET /stream`, and the queue/abort/reset/approve operations. |
+| `VoiceSession.kt` | One call's concierge: the FSM, its two ports, the SSE reader, reconnect, and the cost guard. Replaces the old WebSocket. |
+| `HttpAgentBridge.kt` | The FSM's `AgentBridge` over HTTP, plus the photo stash and the location line folded into a task's text. |
+| `VoiceConverters.kt` | Typed agent events back to the JSON that `ActivityLog` and `AgentEventRouter` read. |
+| `ConciergeProtocol.kt` | Kotlin port of the server's nudge logic (kept honest by parity fixtures). |
 | `ActivityLog.kt` | Kotlin port of the server's activity-log describer; feeds `getSaiStatus` and the UI. |
 | `AgentEventRouter.kt` | Routes incoming agent events to speech/log/UI. |
 
@@ -164,7 +167,9 @@ Fast JVM unit tests (14 classes, no device/emulator needed). Two kinds:
   `AgentEventRouterTest`, `ActivityLogTest`, `ConciergeProtocolTest`,
   `CallNotificationTextTest`, `PresenterSocketTest`).
 - **`*ParityTest.kt`** — replay a shared fixture to prove the Kotlin port matches the server
-  (`ConciergeProtocolParityTest`, `ConciergeSocketParityTest`, `ActivityLogParityTest`).
+  (`ConciergeProtocolParityTest`, `ActivityLogParityTest`).
+- **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 62 scenarios ported from the
+  server's catalog, each naming the failure it prevents.
 
 ---
 

@@ -26,29 +26,33 @@ So the split is:
 
 | Concern | Where | Why |
 | --- | --- | --- |
-| Gemini credential | **either** | See "Two ways to authenticate" below |
-| System prompt + tool declarations | **server**, when you use one | Model config, delivered per session; a standalone build falls back to the bundled defaults |
-| Agent access, approval writes | **server** | Someone else's computer doing real work — this is the trust boundary, and the billed half |
+| Agent access, approval writes | **server** | Someone else's computer doing real work — the trust boundary, and the billed half |
+| Gemini credential | **this app** | Your key, from `local.properties` |
+| System prompt, tools, voice | **this app** | Bundled — there is no server call that delivers them |
 | **The FSM, spoken lines, nudges** | **this app** | The conversation is yours to change |
 
-### Two ways to authenticate
+The server has exactly one voice-related endpoint left — `/v1/voice/*`, which is how work reaches
+your agent. Everything else about a call is here.
 
-Audio is a direct device↔Gemini Live session either way. Only the credential differs.
+### Your own Gemini key
 
-- **Your own Gemini API key.** Enter it in settings; the app opens Live with it and never calls
-  `/v1/concierge/session` for a token. **The voice half then needs no Simular server at all** — which
-  is the point of this repo being public. You pay Google directly for what you use.
-- **A server-minted ephemeral token.** What the first-party build does: `POST /v1/concierge/session`
-  returns a `uses: 1` token with a ~2-minute window to start a session, so Simular's API key stays
-  server-side.
+Put `gemini_api_key` in `meta-android-app/local.properties` and build. That is the same route
+`presenter_key`, `firebase_api_key` and `concierge_url` already take, and it is listed with them in
+the README key table.
 
-**Voice is not billed.** Only agent calls are — the work Sai does on your machine, through
-`/v1/voice/message`. Talking to the concierge costs whatever your Gemini key costs you and nothing
+There is no server-minted token and no fallback to one. **The voice half of this app needs no
+Simular server at all** — which is the point of the repo being public. You pay Google directly for
+what you use.
+
+**Voice is not billed by us.** Only agent calls are: the work Sai does on your machine, through
+`/v1/voice/message`. Talking to the concierge costs whatever your Gemini key costs you, and nothing
 else.
 
-Your API key is a secret on a handset: it is stored encrypted, never logged, never included in the
-presenter feed or a bug report, and **never sent to a Simular endpoint**. It is your key and your
-Google bill; the server has no reason to see it.
+One caveat to hold onto: a `BuildConfig` field is a plaintext constant in the built APK, so **the key
+travels with any build you share**. That is fine for building and testing yourself, and it is the
+same bargain `presenter_key` already makes. It is not fine for handing that APK to someone else, and
+not fine for a published release. Never log it, never let it into the presenter feed — and note it is
+never sent to a Simular endpoint, because the server has no reason to see it.
 
 ## 2. The shape: pure core, thin driver
 
