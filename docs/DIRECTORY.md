@@ -132,6 +132,7 @@ no coroutines, no clock, no I/O — which is what makes the golden catalog runna
 | `Races.kt` | The three races against the agent's own drain, and their ordering constraints. |
 | `CostGuard.kt` | The two bounds on what an open microphone can cost. |
 | `Speech.kt` | Every line the FSM produces — `say` (verbatim) and `instruct` (model-only). |
+| `VoiceProfile.kt` | Loads `assets/voice-profile.json`: the system prompt, the tool declarations, the model and the voice. Ships with the app, because no server delivers them any more. |
 
 ### Support
 
@@ -150,6 +151,12 @@ no coroutines, no clock, no I/O — which is what makes the golden catalog runna
 | `PresenterSocket.kt` | Streams call audio/log/status to the demo dashboard. |
 | `WindowCapture.kt` | Mirrors the app's own window as ~3 fps JPEGs to the dashboard. |
 
+### Assets — `app/src/main/assets/`
+
+| Path | What it is |
+| --- | --- |
+| `voice-profile.json` | The system prompt (41 blocks), the 18 tool declarations, the model and the voice. **Generated** from the server's source before it was deleted — the wording is load-bearing, so it was never retyped. The same bytes are vendored to `app/src/test/resources/parity/prompt-and-tools.json` and read by cloud-api's eval. |
+
 ### Resources — `app/src/main/res/`
 
 | Path | What it is |
@@ -160,7 +167,7 @@ no coroutines, no clock, no I/O — which is what makes the golden catalog runna
 
 ### Tests — `app/src/test/java/…/saispike/`
 
-Fast JVM unit tests (14 classes, no device/emulator needed). Two kinds:
+Fast JVM unit tests (20 classes, 239 tests, no device/emulator needed). Three kinds:
 
 - **`*Test.kt`** — behaviour tests for one class each (`GlassesLinkTest`, `HangupPolicyTest`,
   `ReconnectPolicyTest`, `GreetingGateTest`, `HeldNudgeQueueTest`, `MachineSwitcherTest`,
