@@ -48,9 +48,16 @@ android {
         localProperties.getProperty("mwdat_application_id", "")
     manifestPlaceholders["mwdat_client_token"] = localProperties.getProperty("mwdat_client_token", "")
 
+    // Your own Gemini API key. The app opens the Live session DIRECTLY with it — there is no
+    // server-minted ephemeral token any more, and audio never touches cloud-api. Compiled in exactly
+    // like presenter_key: fine for a build you run yourself, not for one you hand out or publish,
+    // because the key travels with the binary. Empty = voice cannot start, and the app says so.
+    buildConfigField(
+        "String", "GEMINI_API_KEY", "\"${localProperties.getProperty("gemini_api_key", "")}\"")
     // Voice-concierge config, from local.properties. concierge_url is the cloud-api base; the shared
     // staging gateway (https://staging.cloud-api.simular.cloud) is the default. The app hits
-    // /v1/concierge/session + /v1/concierge/ws over HTTPS/WSS (no adb reverse).
+    // /v1/voice/* over HTTPS — that reaches the AGENT; the voice conversation itself needs nothing
+    // from it.
     buildConfigField(
         "String",
         "CONCIERGE_URL",
@@ -144,6 +151,10 @@ dependencies {
   implementation(libs.androidx.credentials.play.services.auth)
   implementation(libs.googleid)
   implementation(libs.kotlinx.coroutines.play.services)
+  // The FSM's Mutex. Already on the classpath transitively, declared explicitly because the voice
+  // concierge state machine depends on it directly: it serialises every input through one lock, and
+  // an implicit dependency is one bump of an unrelated library away from disappearing.
+  implementation(libs.kotlinx.coroutines.core)
   // FusedLocationProviderClient, for "what's the weather / what's near me". The framework
   // LocationManager would avoid this dependency but is markedly worse at producing a fix indoors or
   // in a pocket, which is where a glasses user asking a question usually is.

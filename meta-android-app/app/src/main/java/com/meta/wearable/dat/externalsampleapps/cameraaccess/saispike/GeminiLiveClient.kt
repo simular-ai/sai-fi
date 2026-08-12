@@ -132,15 +132,15 @@ class GeminiLiveClient(
       OkHttpClient.Builder().pingInterval(20, java.util.concurrent.TimeUnit.SECONDS).build()
   private var ws: WebSocket? = null
 
-  fun connect(boot: SessionBootstrap) {
-    // Ephemeral tokens (the `auth_tokens/…` value from authTokens.create) use the *Constrained*
-    // method + the `access_token` param — NOT `BidiGenerateContent?key=` (that's for a real API key,
-    // and passing an ephemeral token there fails with 1007 "api key not valid"). This mirrors how
-    // @google/genai builds the Live WS URL for a token starting with `auth_tokens/`.
+  fun connect(boot: SessionBootstrap, apiKey: String) {
+    // A real API key uses the plain BidiGenerateContent method + `?key=`. The *Constrained* method
+    // with `?access_token=` is for an ephemeral `auth_tokens/…` value, and there is no longer any
+    // such thing here — the device holds the user's own key. Passing a key to the Constrained form
+    // (or a token to this one) fails with 1007 "api key not valid", so the pair is not swappable.
     val url =
         "wss://generativelanguage.googleapis.com/ws/" +
-            "google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained" +
-            "?access_token=${boot.token}"
+            "google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent" +
+            "?key=$apiKey"
     // Fresh session ⇒ fresh turn state (also correct on a reconnect: the old turn is gone).
     modelSpeaking = false
     ready = false

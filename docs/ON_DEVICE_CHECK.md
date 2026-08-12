@@ -25,10 +25,15 @@ confirm it is up and serving the concierge routes before you touch the glasses:
 ```bash
 CONCIERGE_URL=$(grep '^concierge_url=' meta-android-app/local.properties | cut -d= -f2-)
 curl -s "$CONCIERGE_URL/health"                                              # → {"status":"ok",…}
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "$CONCIERGE_URL/v1/concierge/session"
-#   401 → the concierge routes exist (unauthenticated, as expected)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "$CONCIERGE_URL/v1/voice/message"
+#   401 → the voice routes exist (unauthenticated, as expected)
 #   404 → you are pointed at a build without them
 ```
+
+> **The voice half does not touch this server.** Audio goes straight from the phone to Google with
+> your own key, and the prompt ships in the APK. What `concierge_url` reaches is your AGENT — so a
+> server that is down means tasks fail, not that Sai stops talking. That distinction is worth holding
+> while you read the checks below.
 
 If you are testing a server branch, **start cloud-api from that branch** or you are testing something
 else, and confirm the process you are hitting is the one you just started:
@@ -75,6 +80,17 @@ The presenter mirrors the conversation, the activity log, call state, glasses ph
 streams to a browser. DEBUG builds only, LAN only.
 
 ---
+
+> **First run after the 2026-08-12 change?** These five paths moved repositories and have never run
+> on hardware. If something is going to be broken, it is one of them:
+>
+> | | What to watch |
+> | --- | --- |
+> | The event stream connects | Nothing at all arrives from the agent if `GET /v1/voice/stream` fails — checks 2, 3 and 6 all go quiet together |
+> | Live opens with `?key=` | The URL form changed. The wrong one closes with `1007 api key not valid` |
+> | An idle call ends itself | The cost guard moved from the server to the phone. Leave a call silent for five minutes; it should hang up and say why |
+> | Waking a machine | The "it's waking / it's ready" lines now travel as `notice` over the stream |
+> | Cancelling a queued task | Four endpoints deep, and the race answers are new — check 6 covers it |
 
 ## 1. The eight checks
 

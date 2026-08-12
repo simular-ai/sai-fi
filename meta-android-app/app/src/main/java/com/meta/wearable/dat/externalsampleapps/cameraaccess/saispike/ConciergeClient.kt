@@ -33,13 +33,14 @@ import org.json.JSONObject
 class ConciergeHttpException(val status: Int, message: String) : IOException(message)
 
 /**
- * Parsed `POST /session` response — the Gemini Live bootstrap (mirrors voice-concierge's
- * `SessionBootstrap`). Everything here is server-decided config; the client never hardcodes it.
+ * What one Live session is configured with.
+ *
+ * This used to be the parsed `POST /v1/concierge/session` response. That endpoint is gone — the
+ * device brings its own API key and ships its own profile — so this is now built locally from
+ * [VoiceProfile] plus the session's machine context.
  */
 data class SessionBootstrap(
-    /** Gemini Live ephemeral token: single-use, ~2 min to START a session, ~30 min lifetime. */
-    val token: String,
-    /** e.g. gemini-3.1-flash-live-preview — set in server code, not the client. */
+    /** e.g. gemini-3.1-flash-live-preview. Ships with the app in `assets/voice-profile.json`. */
     val model: String,
     val systemPrompt: String,
     /** Raw JSON array of function declarations, forwarded to the Live session as-is. */
@@ -85,71 +86,6 @@ object ConciergeClient {
           val m = arr.getJSONObject(it)
           Machine(m.getString("machineId"), m.optString("name").ifEmpty { null })
         }
-      }
-
-  /**
-   * Fetch a Live session bootstrap. [baseUrl] is the cloud-api base (e.g. the staging Cloud Run URL,
-   * or http://localhost:8080 for a local server), [bearerToken] a fresh Firebase ID token. [machineId] names the active
-   * VM in the persona prompt; [machines] lets the server tell the model which machines it can switch
-   * between (for the switchMachine voice tool). Throws [ConciergeHttpException] on a non-2xx response —
-   * 401 (bad token), 402 (out of credits), 403 (machine not owned), 503 (voice disabled / not
-   * configured).
-   */
-  suspend fun fetchSession(
-      baseUrl: String,
-      bearerToken: String,
-      machineId: String? = null,
-      machines: List<Machine> = emptyList(),
-  ): SessionBootstrap =
-      withContext(Dispatchers.IO) {
-        val conn =
-            (URL("$baseUrl/v1/concierge/session").openConnection() as HttpURLConnection).apply {
-              requestMethod = "POST"
-              doOutput = true
-              connectTimeout = 10_000
-              readTimeout = 15_000
-              setRequestProperty("Authorization", "Bearer $bearerToken")
-              // Route to a specific PR's staging revision via the shared staging gateway.
-              if (BuildConfig.SAI_VERSION_TAG.isNotBlank()) {
-                setRequestProperty("x-sai-version", BuildConfig.SAI_VERSION_TAG)
-              }
-              setRequestProperty("Content-Type", "application/json")
-            }
-        val payload =
-            JSONObject().apply {
-              if (!machineId.isNullOrBlank()) put("machineId", machineId)
-              if (machines.isNotEmpty()) {
-                put(
-                    "machines",
-                    JSONArray().apply {
-                      machines.forEach {
-                        put(JSONObject().put("machineId", it.machineId).put("name", it.label))
-                      }
-                    },
-                )
-              }
-            }
-        conn.outputStream.use { it.write(payload.toString().toByteArray()) }
-
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
-        conn.disconnect()
-
-        if (code !in 200..299) {
-          throw ConciergeHttpException(code, "POST /session failed: HTTP $code — ${body.take(300)}")
-        }
-
-        val json = JSONObject(body)
-        val tools = json.optJSONArray("tools")
-        SessionBootstrap(
-            token = json.getString("token"),
-            model = json.getString("model"),
-            systemPrompt = json.optString("systemPrompt", ""),
-            toolsJson = tools?.toString() ?: "[]",
-            toolCount = tools?.length() ?: 0,
-            voice = json.optString("voice", ""),
-        )
       }
 
   /**

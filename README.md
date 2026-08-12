@@ -2,18 +2,25 @@
 
 A standalone Android app that puts the **Sai voice concierge** on Meta Ray-Ban glasses.
 
-The phone runs a client-side Gemini Live audio session and relays to Sai's cloud API over a
-WebSocket; the glasses are the microphone, speaker and camera, reached through Meta's Device Access
-Toolkit via the Meta AI companion app. Talk to Sai hands-free, hand work to an agent running on your
-own machine, and hear about it when it is done.
+The phone runs a Gemini Live audio session **directly, with your own API key**, and runs the whole
+conversation — the state machine that queues, interrupts and resolves — itself. It talks to Sai's
+cloud API only to reach your agent. The glasses are the microphone, speaker and camera, reached
+through Meta's Device Access Toolkit via the Meta AI companion app.
+
+Talk to Sai hands-free, hand work to an agent running on your own machine, and hear about it when it
+is done. **The voice half needs no server of ours**; the agent half needs a Sai account, because that
+is someone else's computer doing real work.
 
 - [`docs/DIRECTORY.md`](docs/DIRECTORY.md) — **new to the code? start here.** A one-line-per-file
   map of the whole repo, so you can find what you want without reading the tree.
 - [`docs/SAI_GLASSES_APP.md`](docs/SAI_GLASSES_APP.md) — this app's architecture: modules, call
   phases, DAT platform facts, dev runbook.
+- [`docs/VOICE_FSM.md`](docs/VOICE_FSM.md) — **the conversation state machine this app owns.** Modes,
+  the effect grammar, the admission rule, the races, and why each rule exists. Read it before changing
+  anything under `fsm/`.
 - [`docs/CONCIERGE_CLIENT_PROTOCOL.md`](docs/CONCIERGE_CLIENT_PROTOCOL.md) — the wire contract between
-  this app and the server: `POST /v1/concierge/session`, the WS message tables, the close codes, and
-  the five tools this client is obliged to answer itself.
+  this app and the server: the `/v1/voice/*` endpoints, the SSE agent events, and the five tools this
+  client is obliged to answer itself.
 - [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md) — **verify a build on real hardware.** Eight
   checks, ~25 minutes, each naming what it actually exercises.
 
@@ -35,7 +42,8 @@ block a build or a call:
 | --- | --- |
 | `github_token` | A GitHub PAT (classic) with `read:packages`. Meta's DAT SDK resolves from GitHub Packages, and it is on the unit-test compile classpath — without this, even `testDebugUnitTest` cannot run |
 | `mwdat_application_id`, `mwdat_client_token` | Your DAT registration, from the Wearables Developer Center. Injected as manifest placeholders, never committed |
-| `concierge_url` | The cloud-api base. Defaults to the shared staging gateway |
+| `gemini_api_key` | **Your own Gemini API key** ([aistudio.google.com](https://aistudio.google.com/)). The app opens the Live session directly with it — there is no server-minted token, and audio never touches our servers. You pay Google for the voice half; we do not bill for it. Compiled into the APK like `presenter_key`, so a build carrying it should not be shared |
+| `concierge_url` | The cloud-api base — this reaches your Sai **agent**. The voice conversation itself needs nothing from it |
 | `firebase_*`, `web_client_id` | Google sign-in. There is no `google-services.json` — these four values replace it. `web_client_id` is the OAuth **web** client, which is what Credential Manager needs for a server-verifiable ID token |
 | `sai_version_tag` | Optional. Pins the app to one server revision via the `x-sai-version` header, so you can test a specific PR's backend instead of whatever staging is serving |
 
@@ -52,8 +60,27 @@ cd meta-android-app && ./gradlew :app:testDebugUnitTest --rerun
 
 `--rerun` matters. Without it the test task reports `UP-TO-DATE` from cache and verifies nothing.
 
-CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 97 JVM tests across
-14 classes, including the cross-port parity tests below. On-device and by-ear checks are still manual.
+CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 239 JVM tests,
+including the 62-scenario FSM golden catalog and the cross-port parity tests below. On-device and
+by-ear checks are still manual.
+
+## Running it
+
+In order. Each step fails in a way the next one cannot explain, so do not skip ahead.
+
+1. **Fill in `local.properties`.** Without `gemini_api_key` the app starts and then logs
+   `start failed: no gemini_api_key` — no call, no audio. Without `github_token` the build cannot
+   even resolve the DAT SDK.
+2. **Register with Meta AI** (see below). The app is unusable until the glasses are registered to it,
+   and only one third-party DAT app can hold a registration at a time.
+3. **Install and sign in.** `./gradlew :app:installDebug`, then Google sign-in in the app — that is
+   what authorises the agent half.
+4. **Pick a machine.** The picker lists the VMs on your Sai account. A hibernated one is woken when
+   the call binds, and Sai says so.
+5. **Start the call**, and talk. The glasses' temple button mutes (tap) and ends (hold).
+
+What you need before any of it: a Meta Ray-Ban pair paired to the Meta AI app, a Gemini API key, a
+Sai account with at least one machine, and JDK 21.
 
 ## Registration
 

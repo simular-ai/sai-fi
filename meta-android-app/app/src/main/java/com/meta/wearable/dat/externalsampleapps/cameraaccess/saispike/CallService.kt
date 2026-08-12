@@ -3,12 +3,12 @@
  */
 
 // CallService — a microphone foreground service that OWNS the call graph (AudioIo + GeminiLiveClient +
-// ConciergeSocket + reconnect), so the call survives screen-off / pocket. The Activity is a thin
+// the concierge FSM + its event stream), so the call survives screen-off / pocket. The Activity is a thin
 // controller; all long-lived call logic lives here. It publishes UI state through CallController and
 // exposes start/stop/toggle/set-route commands as Intent actions.
 //
 // Voice-driven controls (client-local Live tools handled here, never forwarded as concierge effects):
-//   • switchMachine — reconnect the concierge WS to another of the user's VMs, confirmed by voice.
+//   • switchMachine — repoint the concierge at another of the user's VMs, confirmed by voice.
 //   • endCall       — the user said goodbye; stop the call after a beat for the spoken sign-off.
 //
 // Glasses-button controls: the DAT temple gesture (GlassesGestureSession) drives pause/resume and end
@@ -19,6 +19,9 @@
 // and/or notified reason instead of retrying — see endCallWithReason.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
+
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.CostGuardReason
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.VoiceProfile
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -48,7 +51,7 @@ class CallService : Service() {
 
   private var audioIo: AudioIo? = null
   private var live: GeminiLiveClient? = null
-  private var concierge: ConciergeSocket? = null
+  private var concierge: VoiceSession? = null
   // Demo-only mirror of the call to a laptop dashboard. DEBUG builds only, and every publish is
   // fire-and-forget: if the laptop is absent or the wifi dies, the call must not notice.
   /**
@@ -242,7 +245,7 @@ class CallService : Service() {
 
     // The concierge WS persists across pause/resume + machine switches.
     buildConcierge(currentMachineId)
-    concierge?.connect()
+    concierge?.start()
 
     startPresenter()
 
@@ -334,7 +337,9 @@ class CallService : Service() {
               captureAndAttach(respond)
             },
             onPhotoDestined = { photoDestined = true },
-            onUsage = { p, r, t -> concierge?.sendUsage(p, r, t) },
+            // Not billing any more — this is the idle guard's "the model is actually speaking"
+            // signal, and it is the only one that distinguishes a live call from an open mic.
+            onUsage = { p, r, _ -> concierge?.onUsage(p, r) },
             onLog = { log(it) },
             onReady = { greetOnFirstReady() },
             onClosed = { if (callActive && !audioPaused && !ending) scheduleLiveReconnect() },
@@ -348,11 +353,15 @@ class CallService : Service() {
 
     scope.launch {
       try {
-        // Fresh ID token per mint (tokens expire ~1h; a call/resume can outlive p.token).
-        val token = SaiAuth.idToken() ?: p.token
-        val boot = ConciergeClient.fetchSession(p.baseUrl, token, currentMachineId, machines)
-        log("session: model=${boot.model} tools=${boot.toolCount}")
-        client.connect(boot)
+        val boot = bootstrap()
+        log("session: model=${boot.model} tools=${boot.toolCount} (profile ships with the app)")
+        if (BuildConfig.GEMINI_API_KEY.isEmpty()) {
+          // Nothing to connect with. Said plainly rather than failing as an opaque 1007 close.
+          log("start failed: no gemini_api_key — set it in local.properties and rebuild")
+          stopAll()
+          return@launch
+        }
+        client.connect(boot, BuildConfig.GEMINI_API_KEY)
         io.start { pcm ->
           client.sendAudio(pcm)
           observer.onMic(pcm)
@@ -463,7 +472,9 @@ class CallService : Service() {
     val now = System.currentTimeMillis()
     if (now - lastKeepaliveMs < KEEPALIVE_INTERVAL_MS) return
     lastKeepaliveMs = now
-    concierge?.sendKeepalive()
+    // The idle bound is enforced on the device now, so this no longer travels anywhere — speech
+    // while muted is still genuine presence, and is what it always meant.
+    concierge?.touch()
   }
 
   /** Temple tap while live — drop the mic + Live session but keep the service, concierge, and gestures. */
@@ -832,30 +843,57 @@ class CallService : Service() {
     CallController.screenSink = presenter.screenSink()
   }
 
+  /**
+   * The Live session's config, built locally.
+   *
+   * There is no `POST /v1/concierge/session` any more: the profile ships in the app and the key
+   * comes from the build. What used to be a network round trip before every connect is now a file
+   * read and a string join, which also means a Live reconnect no longer depends on cloud-api being
+   * reachable.
+   */
+  private fun bootstrap(): SessionBootstrap {
+    val profile = voiceProfile()
+    return SessionBootstrap(
+        model = profile.model,
+        systemPrompt =
+            profile.systemPromptWithContext(
+                activeMachine = currentMachineLabel,
+                machineNames = machines.map { it.label },
+            ),
+        toolsJson = profile.toolsJson().toString(),
+        toolCount = profile.tools.size,
+        voice = profile.voice,
+    )
+  }
+
+  private var cachedProfile: VoiceProfile? = null
+
+  private fun voiceProfile(): VoiceProfile =
+      cachedProfile
+          ?: VoiceProfile.load(assets.open(VoiceProfile.ASSET)).also { cachedProfile = it }
+
   private fun buildConcierge(machineId: String) {
     val p = params ?: return
     concierge =
-        ConciergeSocket(
+        VoiceSession(
             baseUrl = p.baseUrl,
-            // Fresh Firebase ID token on every WS (re)connect (tokens expire ~1h; a long call's WS
-            // can outlive p.token). Falls back to the start-time token only if a refresh isn't available.
+            // Fresh Firebase ID token per attempt — a long call outlives the ~1h one it started with.
             tokenProvider = { SaiAuth.idToken() ?: p.token },
-            scope = scope,
             machineId = machineId,
+            scope = scope,
+            speak = { kind, text -> live?.injectNudge(kind, text) },
             onAgentEvent = { e ->
-              // NOT recorded here. The server mirrors EVERY agent event to `agent-activity`
-              // (attach-ws), and the ones that also warrant a reaction arrive a second time on this
-              // channel — so recording in both places counted the same event twice. Consecutive
-              // duplicate LINES were already swallowed, which hid it, but the step counter is not
-              // deduplicated: a failed step (the one `progress` that reaches both channels) was
-              // counted twice, and getSaiStatus read the inflated number out loud.
-              //
-              // onAgentActivity is the recording channel; this one is only for reacting. The DECISION
-              // is AgentEventRouter's — pure, and tested; this block only carries it out.
+              // The FSM has already decided what this event MEANS (VoiceSession hands it over). This
+              // block is the two things that are still the client's: recording it, and deciding
+              // whether to nudge the model about it.
+              val json = agentEventToJson(e)
+              activityLog.record(json)
+              log(renderAgentActivity(json))
+
               val now = SystemClock.elapsedRealtime()
               val action =
                   AgentEventRouter.route(
-                      event = e,
+                      event = json,
                       muted = saiMuted,
                       userQuietMs =
                           if (lastUserSpeechAt == 0L) Long.MAX_VALUE else now - lastUserSpeechAt,
@@ -876,25 +914,12 @@ class CallService : Service() {
                 is NudgeAction.Hold -> holdNudge(action.kind, action.nudge)
               }
             },
-            onAgentActivity = { e ->
-              activityLog.record(e)
-              log(renderAgentActivity(e))
-            },
-            onSpeak = { text ->
-              live?.injectNudge("speak", "[system] Say to the user, briefly and verbatim: \"$text\"")
-            },
-            // Context, not speech — injected as sent, with no "say this verbatim" wrapper. Not held
-            // while muted: it corrects a belief the model would otherwise act on (that its rejected
-            // choice went through), and MUTED_NUDGE already governs whether Sai says anything about it.
-            onInstruct = { text -> live?.injectNudge("instruct", text) },
-            onApprovalTimeout = { live?.injectNudge("approval-timeout", APPROVAL_TIMEOUT_NUDGE) },
-            // Permanent WS-upgrade rejection — the Live audio session may still be up, so let the model
-            // speak the reason before we tear the call down.
+            // Permanent rejection on the event stream — the Live audio session may still be up, so
+            // let the model speak the reason before we tear the call down.
             onPermanentFailure = { code -> endCallWithReason(code, speak = true) },
-            // Server cost guard ended the call (max duration / idle) — say why, then tear down.
-            onEndByServer = { code, _ -> endCallByServer(code) },
+            onCostGuard = { reason -> endCallByGuard(reason) },
             onConnectionChange = { ok ->
-              // Only while the call is up: a socket closing as part of teardown isn't a fault, and
+              // Only while the call is up: a stream closing as part of teardown isn't a fault, and
               // flagging it would leave the chip stuck on "reconnecting" after the call ends.
               if (callActive && !ending) CallController.update { it.copy(reconnecting = !ok) }
             },
@@ -902,17 +927,22 @@ class CallService : Service() {
         )
   }
 
-  /** The server ended the call for a cost guard (max duration / idle). Speak a reason, then stop. */
-  private fun endCallByServer(code: Int) {
+  /**
+   * A cost bound tripped. Speak a reason, then stop.
+   *
+   * These used to arrive as WS close codes 4001/4002 from the server's guard. There is no socket and
+   * no server-side notion of this call any more, so the bound is enforced on the device — but the
+   * user-facing behaviour is unchanged, because the reason is what they actually experience.
+   */
+  private fun endCallByGuard(reason: CostGuardReason) {
     if (ending) return
     ending = true // suppress reconnects while we wind down
     val line =
-        when (code) {
-          ConciergeSocket.CLOSE_MAX_DURATION ->
+        when (reason) {
+          CostGuardReason.MAX_DURATION ->
               "We've been on a while, so I'll wrap up here — call me back anytime."
-          ConciergeSocket.CLOSE_IDLE ->
+          CostGuardReason.IDLE ->
               "It's been quiet for a bit, so I'll hang up to save battery. Tap to start again."
-          else -> "I'll end the call here."
         }
     status("ending…")
     // Muted, "speaking" the reason reaches nobody — fall through to the notification instead, and skip
@@ -973,7 +1003,7 @@ class CallService : Service() {
     scope.launch {
       concierge?.close()
       buildConcierge(match.machineId)
-      concierge?.connect()
+      concierge?.start()
       CallController.update { it.copy(machineLabel = match.label, machineId = match.machineId) }
       updateNotification("Listening — ${match.label}")
       log("switched machine → ${match.label}")
@@ -997,11 +1027,9 @@ class CallService : Service() {
         delay(backoff)
         if (!callActive) break
         try {
-          val p = params ?: break
-          val token = SaiAuth.idToken() ?: p.token
-          val boot = ConciergeClient.fetchSession(p.baseUrl, token, currentMachineId, machines)
+          params ?: break
           endTurn()
-          live?.connect(boot)
+          live?.connect(bootstrap(), BuildConfig.GEMINI_API_KEY)
           CallController.update { it.copy(reconnecting = false) }
           status("live — talk")
           log("live: reconnected")
@@ -1143,7 +1171,7 @@ class CallService : Service() {
   ) {
     when (fix) {
       is PhoneLocation.Result.Success -> {
-        concierge?.sendLocation(fix.place.toJson())
+        concierge?.bridge?.setPendingLocation(fix.place.toTaskLocation())
         log("📍 sent the user's location with this request (${fix.place.label ?: "no place name"})")
       }
       is PhoneLocation.Result.Failure -> {
@@ -1173,7 +1201,7 @@ class CallService : Service() {
     if (wantsPhoto) {
       val att = latestAttachment
       if (att != null) {
-        concierge?.sendAttachment(att)
+        concierge?.bridge?.addPendingAttachment(att.toTaskAttachment())
         // The clipboard KEEPS the photo after a send. It used to be cleared here, on the rule "one
         // send per capture; a later request shouldn't silently re-attach" — but that rule was aimed at
         // an UNRELATED request riding the photo, and the flag is what distinguishes the two. Clearing
@@ -1205,7 +1233,8 @@ class CallService : Service() {
         )
       }
     }
-    concierge?.sendEffects(effects)
+    // Straight into the local FSM — no round trip, and no server decision in between.
+    concierge?.applyEffects(effects)
   }
 
   /** Debug composer: send a typed user turn (barges in like speech). */
