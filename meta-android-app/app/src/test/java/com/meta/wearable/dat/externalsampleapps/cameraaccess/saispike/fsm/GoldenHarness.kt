@@ -208,6 +208,8 @@ fun effect(kind: String, vararg pairs: Pair<String, Any?>): JSONObject =
       pairs.forEach { (k, v) -> put(k, v) }
     }
 
+fun jsonArrayOf(vararg values: String): JSONArray = JSONArray().apply { values.forEach { put(it) } }
+
 data class Scenario(
     val name: String,
     val guards: String,

@@ -58,6 +58,12 @@ class Concierge(
     private val timer: Timer,
     /** Optional sink for the session projection the client's activity log reads. */
     private val onSessionState: (suspend (AgentEvent.SessionState) -> Unit)? = null,
+    /**
+     * Wall clock, injected so the approval lead time is testable — the same idiom ActivityLog uses.
+     * An `expiresAt` is an absolute epoch ms, so the lead calculation needs the same clock the
+     * timer runs on, or a virtual-time test schedules against real now and never fires.
+     */
+    private val now: () -> Long = { System.currentTimeMillis() },
     private val log: (String) -> Unit = {},
 ) {
   private var state: ConciergeState = initialState()
@@ -247,7 +253,7 @@ class Concierge(
   private fun scheduleApprovalTimeout(expiresAt: Long?) {
     clearApprovalTimer()
     if (expiresAt == null) return // no expiry means no ping
-    val delay = (expiresAt - System.currentTimeMillis() - APPROVAL_TIMEOUT_LEAD_MS).coerceAtLeast(0)
+    val delay = (expiresAt - now() - APPROVAL_TIMEOUT_LEAD_MS).coerceAtLeast(0)
     approvalTimer = timer.schedule(delay) { onApprovalTimeoutFired() }
   }
 

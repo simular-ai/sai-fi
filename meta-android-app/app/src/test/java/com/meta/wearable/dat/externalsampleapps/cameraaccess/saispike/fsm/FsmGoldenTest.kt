@@ -32,7 +32,16 @@ class FsmGoldenTest(private val scenario: Scenario) {
     val timer = VirtualTimer()
     val published = mutableListOf<AgentEvent.SessionState>()
 
-    val concierge = Concierge(agent, voice, engine, timer, onSessionState = { published += it })
+    // The FSM's clock IS the virtual timer's, so an absolute `expiresAt` and the delay computed
+    // from it agree. Wired to real time, an advanceMs step would never reach the deadline.
+    val concierge =
+        Concierge(
+            agent,
+            voice,
+            engine,
+            timer,
+            onSessionState = { published += it },
+            now = { timer.now })
     val ctx = GoldenCtx(agent, voice, concierge, published, timer)
     concierge.onApprovalTimeoutFired = { runBlocking { concierge.onApprovalTimeoutWarning() } }
 
