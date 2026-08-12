@@ -25,11 +25,22 @@ sdk.dir=/Users/you/Library/Android/sdk
 mwdat_application_id=
 mwdat_client_token=
 
+# ── Required to RUN: your own Gemini API key ─────────────────────────────────────────────────────
+
+# The app opens the Gemini Live session DIRECTLY with this key — audio never goes through any server
+# of ours, and there is no server-minted token any more. Get one from https://aistudio.google.com/
+# and note that YOU pay Google for what the voice half uses; we do not bill for it.
+#
+# It is compiled into the APK as a BuildConfig constant, exactly like presenter_key below. That is
+# fine for a build you run yourself, and NOT fine for a build you hand to someone else or publish —
+# the key travels with the binary.
+gemini_api_key=
+
 # ── Required to RUN: the concierge backend ───────────────────────────────────────────────────────
 
 # cloud-api base. The shared staging gateway is the default in build.gradle.kts; set this to point
-# somewhere else. The app calls /v1/concierge/session and /v1/concierge/ws over HTTPS/WSS — no
-# `adb reverse` needed.
+# somewhere else. The app calls /v1/voice/* over HTTPS — no `adb reverse` needed. This is only for
+# reaching your Sai AGENT; the voice conversation itself needs nothing from it.
 concierge_url=https://staging.cloud-api.simular.cloud
 
 # ── Required to RUN: Google sign-in (Firebase ID token) ──────────────────────────────────────────

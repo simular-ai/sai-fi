@@ -35,7 +35,8 @@ block a build or a call:
 | --- | --- |
 | `github_token` | A GitHub PAT (classic) with `read:packages`. Meta's DAT SDK resolves from GitHub Packages, and it is on the unit-test compile classpath — without this, even `testDebugUnitTest` cannot run |
 | `mwdat_application_id`, `mwdat_client_token` | Your DAT registration, from the Wearables Developer Center. Injected as manifest placeholders, never committed |
-| `concierge_url` | The cloud-api base. Defaults to the shared staging gateway |
+| `gemini_api_key` | **Your own Gemini API key** ([aistudio.google.com](https://aistudio.google.com/)). The app opens the Live session directly with it — there is no server-minted token, and audio never touches our servers. You pay Google for the voice half; we do not bill for it. Compiled into the APK like `presenter_key`, so a build carrying it should not be shared |
+| `concierge_url` | The cloud-api base — this reaches your Sai **agent**. The voice conversation itself needs nothing from it |
 | `firebase_*`, `web_client_id` | Google sign-in. There is no `google-services.json` — these four values replace it. `web_client_id` is the OAuth **web** client, which is what Credential Manager needs for a server-verifiable ID token |
 | `sai_version_tag` | Optional. Pins the app to one server revision via the `x-sai-version` header, so you can test a specific PR's backend instead of whatever staging is serving |
 
