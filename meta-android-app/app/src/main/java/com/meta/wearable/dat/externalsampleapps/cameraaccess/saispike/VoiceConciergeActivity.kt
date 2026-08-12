@@ -42,6 +42,8 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.BuildConfig
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.ConciergeScreen
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.theme.SaiTheme
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
@@ -95,6 +97,20 @@ class VoiceConciergeActivity : ComponentActivity() {
   var locationRationaleOpen by mutableStateOf(false)
   // Request the glasses camera permission automatically once per process, right after registration.
   private var cameraPermRequested = false
+
+  // DAT device discovery is wired up exactly once, inside Wearables.initialize() (SaiFiApp), against
+  // whatever ACDC link exists at that instant. A *first* registration happens after that, and the SDK
+  // does not restart device monitoring when it completes — so Wearables.devices stays empty for the
+  // rest of the process and the glasses we just registered never appear. That is what left the camera
+  // grant greyed (glassesLinked settled to false) with no auto-prompt until a manual force-quit, on
+  // exactly the fresh-install run that needs it. When *we* started registration in this process,
+  // rebuild DAT once it lands (reinitializeDatForFreshRegistration) so monitoring re-runs against the
+  // now-registered link — the in-process equivalent of the restart that used to be required.
+  private var startedRegistrationThisProcess = false
+  private var datReinitializedThisProcess = false
+  // The DAT-bound collectors (registration state + live link). Held so the re-init above can drop the
+  // subscriptions to the outgoing Wearables instance and re-establish them against the new one.
+  private var datObservers: Job? = null
 
   // Auth state (Google Sign-In → Firebase). Drives the sign-in UI + gates loading machines / starting.
   var signedIn by mutableStateOf(false)
@@ -215,7 +231,7 @@ class VoiceConciergeActivity : ComponentActivity() {
   // Separate BT gate for DAT registration (its grant kicks off registration, not routing).
   private val datBtPermission =
       registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) Wearables.startRegistration(this)
+        if (granted) beginRegistration()
         else showGlassesError("Bluetooth needed to register glasses")
       }
 
@@ -224,13 +240,19 @@ class VoiceConciergeActivity : ComponentActivity() {
   private val datCameraPermission =
       registerForActivityResult(Wearables.RequestPermissionContract()) { result ->
         val status = result.getOrNull()
-        glassesCameraGranted = status == PermissionStatus.Granted
         CallController.appendLog("glasses camera: ${status ?: "denied"}")
-        refreshGlassesCameraStatus()
+        // The flow's own result is authoritative — latch a grant and persist it. Deliberately do NOT
+        // re-query checkPermissionStatus here: it lags the grant by seconds and would answer stale
+        // `Denied`, undoing the grant we just watched succeed. A `Denied` result leaves the flag as it
+        // was (a real grant is never revoked by a failed attempt).
+        if (status == PermissionStatus.Granted) markGlassesCameraGranted()
       }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // Seed the grant from what we last confirmed, so a grant already obtained stays shown while DAT's
+    // laggy checkPermissionStatus catches up (see Prefs.glassesCameraGranted). refresh only upgrades.
+    glassesCameraGranted = Prefs.glassesCameraGranted(this)
     refreshAuthState()
     refreshRouteStatus()
     refreshGlassesCameraStatus()
@@ -239,41 +261,7 @@ class VoiceConciergeActivity : ComponentActivity() {
     // system. This used to be a bare `darkColorScheme()` — the stock Material baseline, i.e. Google's
     // purple, with nothing of Sai's brand in it.
     setContent { SaiTheme { ConciergeScreen(this) } }
-    // React to DAT registration changes (SDK initialized in SaiFiApp). Auto-request the glasses
-    // camera permission the first time we see REGISTERED *and* a device is linked — otherwise Meta AI
-    // opens a permission sheet that can't complete with the glasses offline.
-    lifecycleScope.launch {
-      Wearables.registrationState.collect { state ->
-        glassesReg = state
-        refreshGlassesCameraStatus()
-        maybeAutoRequestGlassesCamera()
-      }
-    }
-    // Live DAT link (powered on / in range) — separate from registration, which persists offline.
-    //
-    // Flatten DAT into `null | Boolean` and hand it to [GlassesLink.observe]. Both
-    // `Wearables.devices` and the per-device metadata are StateFlows, so the first reading is a seeded
-    // empty set — see GlassesLink's docs. The observe call is the whole defence; do not inline a
-    // collector here that maps that first empty set to `false`.
-    lifecycleScope.launch {
-      @OptIn(ExperimentalCoroutinesApi::class)
-      val readable =
-          Wearables.devices.transformLatest { ids ->
-            val flows = ids.mapNotNull { Wearables.devicesMetadata[it] }
-            if (flows.isEmpty()) {
-              emit(null)
-            } else {
-              emitAll(
-                  combine(flows) { devices ->
-                    devices.any { it.linkState == LinkState.CONNECTED }
-                  })
-            }
-          }
-      GlassesLink().observe(readable) { linked ->
-        publishGlassesLink(linked)
-        if (linked == true) maybeAutoRequestGlassesCamera()
-      }
-    }
+    startDatObservers()
     // A call ends leaving the *service's* mid-call route string in place — "on glasses: SCO", or the
     // alarming "glasses lost — …reconnect glasses" — and nothing recomputed it: the DAT link hasn't
     // changed, and onResume never fires because this screen was already resumed. Recompute on the edge
@@ -282,6 +270,103 @@ class VoiceConciergeActivity : ComponentActivity() {
       CallController.state.map { it.active }.distinctUntilChanged().collect { active ->
         if (!active) refreshRouteStatus()
       }
+    }
+  }
+
+  /**
+   * (Re)subscribe the DAT-bound collectors: registration state, and the live glasses link.
+   *
+   * Kept in one relaunchable place because [reinitializeDatForFreshRegistration] tears the SDK down and
+   * back up after a first registration, which invalidates the flows these collect — they belong to the
+   * outgoing Wearables instance and simply go silent. Cancelling this job and calling it again rebinds
+   * both to the new instance. (The call-state collector in [onCreate] is deliberately not here: it is
+   * independent of DAT.)
+   *
+   * Registration drives the one-time camera auto-request the first time we see REGISTERED *and* a
+   * device is linked — otherwise Meta AI opens a permission sheet that can't complete with the glasses
+   * offline. The live-link half flattens DAT into `null | Boolean` and hands it to [GlassesLink.observe]:
+   * both `Wearables.devices` and the per-device metadata are StateFlows, so the first reading is a
+   * seeded empty set (see GlassesLink's docs). The observe call is the whole defence — do not inline a
+   * collector that maps that first empty set to `false`.
+   */
+  private fun startDatObservers() {
+    datObservers?.cancel()
+    datObservers =
+        lifecycleScope.launch {
+          launch {
+            Wearables.registrationState.collect { state ->
+              glassesReg = state
+              refreshGlassesCameraStatus()
+              maybeAutoRequestGlassesCamera()
+              maybeReinitializeAfterRegistration(state)
+            }
+          }
+          launch {
+            @OptIn(ExperimentalCoroutinesApi::class)
+            val readable =
+                Wearables.devices.transformLatest { ids ->
+                  val flows = ids.mapNotNull { Wearables.devicesMetadata[it] }
+                  if (flows.isEmpty()) {
+                    emit(null)
+                  } else {
+                    emitAll(
+                        combine(flows) { devices ->
+                          when {
+                            devices.any { it.linkState == LinkState.CONNECTED } -> true
+                            // A device is present but still negotiating the link (CONNECTING) — that
+                            // is "checking", not an affirmative "no glasses". Report it as unknown
+                            // (`null`) so the grant button stays live and the label doesn't flip to
+                            // "disconnected" while the radio links, which is most of the window right
+                            // after a first registration. All-DISCONNECTED is a real no.
+                            devices.any { it.linkState == LinkState.CONNECTING } -> null
+                            else -> false
+                          }
+                        })
+                  }
+                }
+            GlassesLink().observe(readable) { linked ->
+              publishGlassesLink(linked)
+              if (linked == true) maybeAutoRequestGlassesCamera()
+            }
+          }
+        }
+  }
+
+  /**
+   * Rebuild DAT once, after a registration *we* started in this process reaches REGISTERED.
+   *
+   * Gated on [startedRegistrationThisProcess] rather than the REGISTERED state alone: a launch that is
+   * already registered also emits REGISTERED, and re-initializing on every cold start would be wasteful
+   * and pointless (that path already discovers the device). Never mid-call — [Wearables.reset] drops
+   * the SDK singleton — though right after registration there is no call to disturb.
+   */
+  private fun maybeReinitializeAfterRegistration(state: RegistrationState) {
+    if (state != RegistrationState.REGISTERED) return
+    if (!startedRegistrationThisProcess || datReinitializedThisProcess) return
+    if (CallController.state.value.active) return
+    datReinitializedThisProcess = true
+    reinitializeDatForFreshRegistration()
+  }
+
+  /**
+   * Tear the SDK down and back up so device monitoring re-runs against the now-registered ACDC link,
+   * then re-arm the link detection and resubscribe. This is what makes the just-registered glasses
+   * appear without a force-quit; see the field docs on [startedRegistrationThisProcess].
+   */
+  private fun reinitializeDatForFreshRegistration() {
+    lifecycleScope.launch {
+      // Drop the collectors bound to the outgoing instance before it goes away.
+      datObservers?.cancelAndJoin()
+      runCatching {
+            Wearables.reset()
+            Wearables.initialize(this@VoiceConciergeActivity)
+          }
+          .onFailure { CallController.appendLog("glasses re-init failed: ${it.message}") }
+      // New instance, new flows: re-arm the one-shot auto-request and drop the link back to "checking",
+      // then resubscribe so the now-visible device can drive glassesLinked -> true (and the grant).
+      cameraPermRequested = false
+      publishGlassesLink(null)
+      startDatObservers()
     }
   }
 
@@ -349,6 +434,16 @@ class VoiceConciergeActivity : ComponentActivity() {
       datBtPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
       return
     }
+    beginRegistration()
+  }
+
+  /**
+   * Start DAT registration, recording that we did so this process — the one-time re-init that lets the
+   * just-registered glasses appear without a force-quit ([maybeReinitializeAfterRegistration]) is gated
+   * on this, so it never fires on a launch that was already registered.
+   */
+  private fun beginRegistration() {
+    startedRegistrationThisProcess = true
     Wearables.startRegistration(this)
   }
 
@@ -422,11 +517,9 @@ class VoiceConciergeActivity : ComponentActivity() {
     if (Prefs.glassesCameraAutoPrompted(this)) return
     cameraPermRequested = true
     lifecycleScope.launch {
-      val granted =
-          Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull() == PermissionStatus.Granted
-      glassesCameraGranted = granted
-      if (granted) {
-        Prefs.setGlassesCameraAutoPrompted(this@VoiceConciergeActivity, true)
+      val status = Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()
+      if (status == PermissionStatus.Granted) {
+        markGlassesCameraGranted()
         return@launch
       }
       if (glassesLinked != true) {
@@ -439,14 +532,24 @@ class VoiceConciergeActivity : ComponentActivity() {
     }
   }
 
+  /**
+   * Latch the glasses-camera grant on and persist it. Called from the authoritative grant result and
+   * from a `checkPermissionStatus` that comes back `Granted`. There is no matching "un-grant": DAT's
+   * status read is too laggy to trust for a downgrade (it reports stale `Denied` for seconds after a
+   * real grant), so the flag only ever moves to `true` in a session — a genuine revocation is picked up
+   * on the next fresh install. Also arms the auto-prompt "already done" flag.
+   */
+  private fun markGlassesCameraGranted() {
+    glassesCameraGranted = true
+    Prefs.setGlassesCameraGranted(this, true)
+    Prefs.setGlassesCameraAutoPrompted(this, true)
+  }
+
+  /** Upgrade-only: promote to granted if DAT confirms it, but never downgrade on a stale/laggy read. */
   private fun refreshGlassesCameraStatus() {
     lifecycleScope.launch {
-      glassesCameraGranted =
-          Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull() == PermissionStatus.Granted
-      // If DAT already says granted, never auto-prompt again.
-      if (glassesCameraGranted) {
-        Prefs.setGlassesCameraAutoPrompted(this@VoiceConciergeActivity, true)
-      }
+      val status = Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()
+      if (status == PermissionStatus.Granted) markGlassesCameraGranted()
     }
   }
 
