@@ -144,6 +144,10 @@ dependencies {
   implementation(libs.androidx.credentials.play.services.auth)
   implementation(libs.googleid)
   implementation(libs.kotlinx.coroutines.play.services)
+  // The FSM's Mutex. Already on the classpath transitively, declared explicitly because the voice
+  // concierge state machine depends on it directly: it serialises every input through one lock, and
+  // an implicit dependency is one bump of an unrelated library away from disappearing.
+  implementation(libs.kotlinx.coroutines.core)
   // FusedLocationProviderClient, for "what's the weather / what's near me". The framework
   // LocationManager would avoid this dependency but is markedly worse at producing a fix indoors or
   // in a pocket, which is where a glasses user asking a question usually is.
