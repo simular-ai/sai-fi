@@ -9,6 +9,8 @@
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm
 
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ActivityLog
+
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -31,6 +33,7 @@ class FsmGoldenTest(private val scenario: Scenario) {
     val engine = FakeEngine(goldenBrain)
     val timer = VirtualTimer()
     val published = mutableListOf<AgentEvent.SessionState>()
+    val activityLog = ActivityLog(now = { timer.now })
 
     // The FSM's clock IS the virtual timer's, so an absolute `expiresAt` and the delay computed
     // from it agree. Wired to real time, an advanceMs step would never reach the deadline.
@@ -40,15 +43,23 @@ class FsmGoldenTest(private val scenario: Scenario) {
             voice,
             engine,
             timer,
-            onSessionState = { published += it },
+            onSessionState = {
+              published += it
+              activityLog.record(sessionStateJson(it))
+            },
             now = { timer.now })
-    val ctx = GoldenCtx(agent, voice, concierge, published, timer)
+    val ctx = GoldenCtx(agent, voice, concierge, published, timer, activityLog)
     concierge.onApprovalTimeoutFired = { runBlocking { concierge.onApprovalTimeoutWarning() } }
 
     for (step in scenario.steps) {
       when (step) {
         is Step.User -> concierge.handleUserUtterance(step.utterance)
-        is Step.Agent -> concierge.handleAgentEvent(step.event)
+        is Step.Agent -> {
+          // The device feeds its ActivityLog from the same agent events, so status assertions see
+          // what the user could actually be told.
+          activityLog.record(agentEventJson(step.event))
+          concierge.handleAgentEvent(step.event)
+        }
         is Step.Effects -> concierge.applyClientEffects(step.raw)
         is Step.AdvanceMs -> timer.advance(step.ms)
         is Step.Do -> step.block(ctx)

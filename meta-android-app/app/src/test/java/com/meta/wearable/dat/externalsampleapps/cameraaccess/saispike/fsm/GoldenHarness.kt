@@ -15,6 +15,8 @@
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm
 
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ActivityLog
+
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -138,6 +140,48 @@ fun photo(name: String) =
         downloadUrl = "https://storage.example/$name",
     )
 
+/**
+ * An agent event as the wire JSON the device's ActivityLog reads.
+ *
+ * The FSM speaks in typed events; ActivityLog was written against the raw frames, and keeping it on
+ * those is deliberate — it is fixture-pinned against the server and must not drift to suit us.
+ */
+fun agentEventJson(e: AgentEvent): JSONObject =
+    when (e) {
+      is AgentEvent.Text -> JSONObject().put("type", "text").put("text", e.text)
+      is AgentEvent.Progress ->
+          JSONObject().put("type", "progress").put("text", e.text).apply {
+            e.tool?.let { put("tool", it) }
+            if (e.failed) put("failed", true)
+          }
+      is AgentEvent.Status -> JSONObject().put("type", "status").put("status", e.status.wire)
+      is AgentEvent.Complete ->
+          JSONObject().put("type", "complete").apply { e.summary?.let { put("summary", it) } }
+      is AgentEvent.Error -> JSONObject().put("type", "error").put("text", e.text)
+      is AgentEvent.Notice -> JSONObject().put("type", "notice").put("text", e.text)
+      is AgentEvent.ApprovalRequest ->
+          JSONObject()
+              .put("type", "approval-request")
+              .put("id", e.id)
+              .put("title", e.title)
+              .put("description", e.description)
+              .put("approvalType", e.approvalType)
+              .put("isLinkOnly", e.isLinkOnly)
+              .put("allowAlways", e.allowAlways)
+      is AgentEvent.ApprovalResolved ->
+          JSONObject().put("type", "approval-resolved").put("id", e.id).put("status", e.status)
+      is AgentEvent.QueuedTaskStarted ->
+          JSONObject().put("type", "queued-task-started").put("pendingId", e.pendingId)
+      is AgentEvent.SessionState -> sessionStateJson(e)
+    }
+
+fun sessionStateJson(s: AgentEvent.SessionState): JSONObject =
+    JSONObject().put("type", "session-state").apply {
+      s.running?.let { put("running", it) }
+      s.blockedOn?.let { put("blockedOn", it) }
+      put("queued", JSONArray().apply { s.queued.forEach { put(it) } })
+    }
+
 /** A timer with a virtual clock, so `advanceMs` steps are deterministic. */
 class VirtualTimer(var now: Long = 0L) : Timer {
   private data class Entry(val dueAt: Long, val action: () -> Unit)
@@ -170,6 +214,14 @@ class GoldenCtx(
     /** Every session-state projection the FSM published, in order. */
     val sessionStates: MutableList<AgentEvent.SessionState>,
     val timer: VirtualTimer,
+    /**
+     * The REAL ActivityLog, fed the same projections the device would get.
+     *
+     * `getSaiStatus` is answered on the device from this, so a scenario asserting what the user can
+     * be told has to go through the real renderer — a stub would let the FSM publish a projection
+     * the log cannot actually express.
+     */
+    val activityLog: ActivityLog,
 ) {
   val state: ConciergeState
     get() = concierge.getState()
@@ -178,11 +230,25 @@ class GoldenCtx(
 
   fun instructedHas(s: String) = voice.instructed.any { it.contains(s) }
 
+  /** What `getSaiStatus` would return on the device right now. */
+  fun status(): String = activityLog.statusText()
+
   /** The pending doc id of the first task the concierge held. */
   fun queuedId(): String? =
       agent.calls.firstOrNull { it.method == "queueTask" }?.let { agent.pendingIdFor(it) }
 
   fun resolveCall() = agent.calls.firstOrNull { it.method == "resolveApproval" }
+}
+
+/**
+ * Stand in for the agent draining its own queue and starting the held task as a fresh turn.
+ *
+ * The agent owns the start now: it drains the pending doc at its own turn boundary, and the
+ * concierge learns about it from `queued-task-started`. The FSM must NOT forward it as well.
+ */
+val agentDrains: suspend (GoldenCtx) -> Unit = { ctx ->
+  val pendingId = ctx.queuedId() ?: error("no queued task to drain")
+  ctx.concierge.handleAgentEvent(ctx.agent.drain(pendingId))
 }
 
 sealed interface Step {

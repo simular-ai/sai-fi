@@ -17,7 +17,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /** Bumped as scenarios land. Must reach 62 before the TypeScript catalog is deleted. */
-const val PORTED_SCENARIO_COUNT = 31
+const val PORTED_SCENARIO_COUNT = 62
 
 private fun forwardTexts(ctx: GoldenCtx) =
     ctx.agent.callsTo("forwardTask").map { it.args["text"] as String }
@@ -662,6 +662,604 @@ val GOLDEN_SCENARIOS: List<Scenario> =
               assertEquals("no task is running", Mode.IDLE, ctx.state.mode)
               assertTrue(
                   "it did speak, it just didn't act", ctx.spokenHas("let me take a look"))
+            },
+        ),
+        Scenario(
+            name = "S32 a forwarded task is not complete until a completion result arrives",
+            guards =
+                "forward + progress stays working; only a complete event reports done (no fabricated success)",
+            steps =
+                listOf(
+                    effects(
+                        effect("forwardToAgent", "text" to "order the charger I am looking at")),
+                    Step.Agent(AgentEvent.Status(AgentStatus.PROCESSING)),
+                    Step.Agent(AgentEvent.Progress("adding it to the cart", tool = "browser")),
+                ),
+            assert = { ctx ->
+              assertEquals(
+                  "forwarded once; nothing completed it", listOf("forwardTask"), callLog(ctx))
+              assertEquals("forwarding ≠ done", Mode.WORKING, ctx.state.mode)
+              assertFalse("no result spoken yet", ctx.spokenHas("order"))
+              assertFalse(ctx.spokenHas("done"))
+            },
+        ),
+        Scenario(
+            name = "S33 admission — a new task while one is running is queued, not folded in",
+            guards = "the admission rule itself; the inverse of the old \"two forwards in one turn\"",
+            // The whole policy in one trace. A second forwardToAgent used to reach the agent as a
+            // mid-turn steer, putting two unrelated requests in one turn: a blended activity log, an
+            // approval slot shared between strangers, and an interrupt that killed bystanders.
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                ),
+            assert = { ctx ->
+              // One task STARTED, one HELD — never two forwards.
+              assertEquals(listOf("forwardTask", "queueTask"), callLog(ctx))
+              assertEquals("check my unread emails", ctx.agent.calls.first().args["text"])
+              assertEquals(listOf("check my unread emails"), ctx.state.inFlight)
+              assertEquals(listOf("book a table for tonight"), ctx.state.queue.map { it.text })
+              // Durable: the entry carries the pending doc it mirrors, which is what survives a
+              // dropped call and what a cancellation deletes.
+              assertTrue(ctx.state.queue.first().pendingId != null)
+              // Named as next, behind something — never "on it", which would be a lie about a task
+              // that has not begun.
+              assertFalse("it echoes what it's BEHIND", ctx.spokenHas("book a table for tonight"))
+              assertTrue(ctx.spokenHas("check my unread emails"))
+              assertTrue(ctx.spokenHas("I'll start that"))
+            },
+        ),
+        Scenario(
+            name = "S34 the queued task runs when the turn ends",
+            guards = "queueing is a delay, not a drop — the promise made in S33 is kept",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    Step.Agent(AgentEvent.Complete("no unread mail")),
+                    Step.Do(agentDrains),
+                ),
+            assert = { ctx ->
+              // Exactly ONE forward. A second here would be the queued task running twice.
+              assertEquals(listOf("check my unread emails"), forwardTexts(ctx))
+              assertEquals(1, ctx.agent.callsTo("queueTask").size)
+              assertEquals(0, ctx.state.queue.size)
+              assertEquals(listOf("book a table for tonight"), ctx.state.inFlight)
+            },
+        ),
+        Scenario(
+            name = "S35 a follow-up about the running task still steers",
+            guards = "admission holds NEW work only — relayToAgent is never queued",
+            // The cut the policy rests on: relayToAgent means "this is about what you're doing",
+            // forwardToAgent means "this is a new thing to do". Queueing a relay would be the
+            // mirror-image bug — an answer the running turn is waiting for, held until it finishes.
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("relayToAgent", "answer" to "make it 8pm, not 7")),
+                ),
+            assert = { ctx ->
+              assertEquals(listOf("forwardTask", "steer"), callLog(ctx))
+              assertEquals("nothing held", 0, ctx.state.queue.size)
+              assertEquals(Mode.WORKING, ctx.state.mode)
+            },
+        ),
+        Scenario(
+            name = "S36 a turn that ends with an approval still pending releases everything",
+            guards = "the orphaned approval used to strand the queue AND wedge every later forward",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "book a table")),
+                    Step.Agent(approval("a-orphan", title = "Which restaurant?")),
+                    effects(effect("forwardToAgent", "text" to "check my email")),
+                    Step.Agent(AgentEvent.Complete("gave up on the booking")),
+                ),
+            assert = { ctx ->
+              assertEquals(listOf("book a table"), forwardTexts(ctx))
+              assertNull("not left behind to block the next forward", ctx.state.pendingApprovalId)
+              assertNull(ctx.state.awaiting)
+              assertEquals("released, not stuck in awaiting-user", Mode.IDLE, ctx.state.mode)
+              // The held task is untouched and still durable — the agent will start it. What this
+              // guards is that the ORPHANED APPROVAL no longer wedges the session.
+              assertEquals(listOf("check my email"), ctx.state.queue.map { it.text })
+              assertTrue(ctx.state.queue.first().pendingId != null)
+            },
+        ),
+        Scenario(
+            name = "S37 a queued task keeps its own photo",
+            guards =
+                "the bridge stash belongs to whoever writes next — a held task cannot leave a photo in it",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my email")),
+                    Step.Do { ctx -> ctx.agent.addPendingAttachment(photo("kettle.jpg")) },
+                    effects(effect("forwardToAgent", "text" to "what is this thing")),
+                    Step.Do { ctx -> ctx.agent.addPendingAttachment(photo("receipt.jpg")) },
+                    Step.Agent(AgentEvent.Complete("inbox clear")),
+                    Step.Do(agentDrains),
+                ),
+            assert = { ctx ->
+              val queued = ctx.agent.calls.first { it.method == "queueTask" }
+              assertEquals("what is this thing", queued.args["text"])
+              // Its own photo, and ONLY its own — the later capture must not have ridden along.
+              @Suppress("UNCHECKED_CAST")
+              val names = (queued.args["attachments"] as? List<TaskAttachment>)?.map { it.name }
+              assertEquals(listOf("kettle.jpg"), names)
+              assertEquals(0, ctx.state.queue.size)
+            },
+        ),
+        Scenario(
+            name = "S38 cancelling something that never started neither aborts nor relays",
+            guards = "a held task is deleted where it lives — the running turn is never touched",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("cancelQueued", "task" to "book a table")),
+                ),
+            assert = { ctx ->
+              // Deleted at its source — NOT by aborting, which would have killed the email check,
+              // and NOT by a steer, since the agent was never running it.
+              assertEquals(listOf("forwardTask", "queueTask", "cancelQueuedTask"), callLog(ctx))
+              assertFalse(callLog(ctx).contains("abort"))
+              assertEquals(
+                  "gone from the durable queue, not just from display",
+                  emptyList<String>(),
+                  ctx.agent.queuedTexts())
+              assertEquals(0, ctx.state.queue.size)
+              assertEquals("untouched", listOf("check my unread emails"), ctx.state.inFlight)
+              assertEquals(Mode.WORKING, ctx.state.mode)
+              // Reported as never-started, not as stopped: nothing was interrupted.
+              assertTrue(ctx.spokenHas("hadn't started"))
+            },
+        ),
+        Scenario(
+            name = "S39 cancelQueued that matches nothing cancels nothing",
+            guards =
+                "a wrong match silently deletes work the user still expects; a miss costs one question",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("cancelQueued", "task" to "the flight to Tokyo")),
+                ),
+            assert = { ctx ->
+              assertEquals(listOf("forwardTask", "queueTask"), callLog(ctx))
+              assertEquals(listOf("book a table for tonight"), ctx.agent.queuedTexts())
+              assertEquals(listOf("book a table for tonight"), ctx.state.queue.map { it.text })
+              // Model-facing, so it must NOT be spoken — and must not claim a cancellation.
+              assertTrue(ctx.instructedHas("NOTHING was cancelled"))
+              assertFalse(ctx.spokenHas("hadn't started"))
+            },
+        ),
+        Scenario(
+            name = "S40 a queued task is answerable — getSaiStatus names it as not started",
+            guards = "step 2: the queue lives in cloud-api, getSaiStatus is answered on the device",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    Step.Agent(AgentEvent.Status(AgentStatus.PROCESSING)),
+                    Step.Agent(AgentEvent.Progress("opening the inbox", tool = "browser")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                ),
+            assert = { ctx ->
+              val s = ctx.status()
+              assertTrue(s, s.contains("Still working"))
+              assertTrue(s, s.contains("NOT STARTED YET"))
+              assertTrue("named, so she can name it", s.contains("book a table for tonight"))
+              // The running task must not appear in the waiting list, or she reports it twice.
+              assertFalse(s, s.contains("\"check my unread emails\""))
+              assertEquals("check my unread emails", ctx.sessionStates.last().running)
+              assertEquals(listOf("book a table for tonight"), ctx.sessionStates.last().queued)
+            },
+        ),
+        Scenario(
+            name = "S41 the queue stops being mentioned the moment it drains",
+            guards = "a stale \"next up\" is the same lie as a missing one, pointing the other way",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    Step.Agent(AgentEvent.Complete("inbox clear")),
+                    Step.Do(agentDrains),
+                ),
+            assert = { ctx ->
+              assertFalse("it started", ctx.status().contains("NOT STARTED YET"))
+              assertEquals("book a table for tonight", ctx.sessionStates.last().running)
+              assertEquals(emptyList<String>(), ctx.sessionStates.last().queued)
+            },
+        ),
+        Scenario(
+            name = "S42 a turn parked on the user reads as blocked, not as working",
+            guards = "device 2026-07-31 — she reported waiting on a third party for her own question",
+            steps =
+                listOf(
+                    effects(
+                        effect(
+                            "forwardToAgent", "text" to "book a table at the place on top of MBS")),
+                    Step.Agent(AgentEvent.Status(AgentStatus.PROCESSING)),
+                    Step.Agent(AgentEvent.Progress("searching", tool = "browser")),
+                    Step.Agent(
+                        approval(
+                            "a-mbs",
+                            title = "Which restaurant?",
+                            description = "CÉ LA VI, or LAVO?")),
+                ),
+            assert = { ctx ->
+              val s = ctx.status()
+              assertTrue(s, s.contains("BLOCKED ON THE USER"))
+              assertTrue("the actual question, so she can re-ask it", s.contains("CÉ LA VI, or LAVO?"))
+              assertTrue(s.contains("never say you're waiting to hear back from anyone else"))
+              assertFalse("the thing she used to say, wrongly", s.contains("Still working"))
+            },
+        ),
+        Scenario(
+            name = "S43 blocked on the user AND something waiting behind it",
+            guards = "the two states are independent — reporting one must not hide the other",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "book a table")),
+                    Step.Agent(approval("a-both", title = "Which restaurant?")),
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                ),
+            assert = { ctx ->
+              val s = ctx.status()
+              assertTrue(s, s.contains("BLOCKED ON THE USER"))
+              assertTrue(s, s.contains("NOT STARTED YET"))
+              assertTrue(s, s.contains("check my unread emails"))
+            },
+        ),
+        Scenario(
+            name = "S44 a held task is written durably, and started by nobody but the agent",
+            guards = "failure mode 7 — an FSM drain plus the agent's own drain runs one task twice",
+            // The single most dangerous property of the durable queue. maybeDrainQueue still exists
+            // for entries the MODEL enqueued, and must skip anything carrying a pendingId. If it
+            // forwards one, the agent runs it too: one booking, two tables.
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    Step.Agent(AgentEvent.Complete("inbox clear")),
+                    Step.Agent(AgentEvent.Status(AgentStatus.IDLE)), // every path that could drain
+                    Step.Agent(AgentEvent.Complete()),
+                ),
+            assert = { ctx ->
+              assertEquals(1, ctx.agent.callsTo("forwardTask").size)
+              assertEquals(1, ctx.agent.callsTo("queueTask").size)
+              // Still waiting, still durable — the agent has not drained it here.
+              assertEquals(listOf("book a table for tonight"), ctx.agent.queuedTexts())
+              assertEquals(listOf("book a table for tonight"), ctx.state.queue.map { it.text })
+            },
+        ),
+        Scenario(
+            name = "S45 a task the model enqueued itself still starts locally",
+            guards = "the drain is narrowed to non-durable entries, not disabled",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "first task")),
+                    effects(
+                        effect("enqueue", "task" to "a locally held task", "urgency" to "normal")),
+                    Step.Agent(AgentEvent.Complete("done")),
+                ),
+            assert = { ctx ->
+              assertEquals(
+                  listOf("first task", "a locally held task"), // started by the FSM; nothing else would
+                  forwardTexts(ctx))
+              assertEquals(0, ctx.state.queue.size)
+            },
+        ),
+        Scenario(
+            name = "S46 \"stop everything\" deletes the durable queue, not just the display copy",
+            guards =
+                "clearing only the FSM copy leaves the agent to start the next task after the abort",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("interrupt")), // asks: one running, one queued
+                    effects(effect("interrupt")), // "all of it"
+                ),
+            assert = { ctx ->
+              assertTrue(callLog(ctx).contains("cancelQueuedTask"))
+              assertTrue(callLog(ctx).contains("abort"))
+              // Left behind, the agent would drain it seconds after she confirmed everything was
+              // stopped — the bug the queue-clearing branch prevents, reintroduced by moving the
+              // queue into Firestore.
+              assertEquals(emptyList<String>(), ctx.agent.queuedTexts())
+              assertEquals(1, ctx.agent.callsTo("forwardTask").size)
+              assertEquals(0, ctx.state.queue.size)
+              assertEquals(emptyList<String>(), ctx.state.inFlight)
+              assertEquals(Mode.IDLE, ctx.state.mode)
+            },
+        ),
+        Scenario(
+            name = "S47 a cancel that loses the race stops the task instead of lying about it",
+            guards = "the drain is atomic — \"cancelled\" has to be checked, not assumed",
+            // The agent can drain a held task at any moment, so a cancellation can arrive a beat too
+            // late. Saying "that's off the list" then would be a fabricated cancellation of a task
+            // that is running. Decided 2026-08-03: finish what the user asked for and stop it,
+            // because they named this specific task.
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    Step.Do { ctx -> ctx.agent.raceLostFor(ctx.queuedId()) }, // it drained first
+                    effects(effect("cancelQueued", "task" to "book a table")),
+                ),
+            assert = { ctx ->
+              assertTrue(callLog(ctx).contains("cancelQueuedTask"))
+              assertTrue("it was running, so stopping it IS the cancel", callLog(ctx).contains("abort"))
+              // Never claims it was dropped before it began — it wasn't.
+              assertFalse(ctx.spokenHas("hadn't started"))
+              assertTrue(ctx.spokenHas("had just started"))
+              assertTrue(ctx.spokenHas("I've stopped it"))
+              assertEquals(Mode.IDLE, ctx.state.mode)
+            },
+        ),
+        Scenario(
+            name = "S48 a durable write that fails is admitted to, not swallowed",
+            guards = "a task accepted nowhere, with nothing said, is the failure this whole policy removes",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    Step.Do { ctx -> ctx.agent.failQueueTask() },
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                ),
+            assert = { ctx ->
+              // Nowhere: not queued locally, not running, and not silently dropped.
+              assertEquals(0, ctx.state.queue.size)
+              assertEquals(listOf("check my unread emails"), ctx.state.inFlight)
+              assertEquals(emptyList<String>(), ctx.agent.queuedTexts())
+              assertTrue(ctx.spokenHas("couldn't get that queued up"))
+              // And it must NOT claim the task is waiting — that is the lie the failure becomes.
+              assertFalse(ctx.spokenHas("I'll start that as soon as"))
+            },
+        ),
+        Scenario(
+            name = "S57 a reorder does not carry the scope question into the new turn",
+            guards = "starting a task clears interruptScopeAsked — the next \"cancel\" asks again",
+            // The drift this pins: six sites started a task and only three cleared the flag.
+            // sendQueuedNow was one that did not, so it survived into a turn it was never asked
+            // about — and the ask is one-shot, so the NEXT "cancel" would abort everything silently.
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my email")),
+                    effects(effect("enqueue", "task" to "book a table", "urgency" to "normal")),
+                    effects(effect("interrupt")), // two outstanding -> asks, sets the flag
+                    effects(effect("sendQueuedNow", "task" to "book a table")), // reorder instead
+                    effects(effect("interrupt")), // must ASK again, not abort everything
+                ),
+            assert = { ctx ->
+              // If the flag had survived the reorder, this interrupt would have gone straight through.
+              assertEquals(0, callLog(ctx).count { it == "abort" })
+              assertEquals("re-asked, freshly", true, ctx.state.interruptScopeAsked)
+            },
+        ),
+        Scenario(
+            name = "S49 \"do that first\" starts the waiting task without stopping the running one",
+            guards = "phase 2 — the escalation that answers a reorder request as a reorder",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("sendQueuedNow", "task" to "book a table")),
+                ),
+            assert = { ctx ->
+              assertEquals(listOf("forwardTask", "queueTask", "sendQueuedNow"), callLog(ctx))
+              // The running task is untouched: no abort, and never re-forwarded.
+              assertFalse(callLog(ctx).contains("abort"))
+              assertEquals(1, ctx.agent.callsTo("forwardTask").size)
+              // Both are in the SAME turn now, which is the cost of arriving early.
+              assertEquals(
+                  listOf("check my unread emails", "book a table for tonight"), ctx.state.inFlight)
+              assertEquals(0, ctx.state.queue.size)
+              assertEquals(Mode.WORKING, ctx.state.mode)
+              assertTrue(ctx.spokenHas("Starting on that now"))
+              assertFalse("it must not read as a swap", ctx.spokenHas("stopped"))
+            },
+        ),
+        Scenario(
+            name = "S50 rushing a task that already started claims nothing",
+            guards = "the same race as cancelling — \"I moved it up\" about a running task is the wrong claim",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    Step.Do { ctx -> ctx.agent.raceLostFor(ctx.queuedId()) },
+                    effects(effect("sendQueuedNow", "task" to "book a table")),
+                ),
+            assert = { ctx ->
+              assertTrue(callLog(ctx).contains("sendQueuedNow"))
+              assertFalse(callLog(ctx).contains("abort"))
+              assertTrue(ctx.spokenHas("already underway"))
+              assertFalse(ctx.spokenHas("Starting on that now"))
+              assertEquals(0, ctx.state.queue.size)
+            },
+        ),
+        Scenario(
+            name = "S51 rushing with nothing waiting changes nothing, and says nothing to the user",
+            guards = "a fabricated \"I bumped that up\" is the same lie family as a fabricated completion",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("sendQueuedNow")),
+                ),
+            assert = { ctx ->
+              assertEquals(listOf("forwardTask"), callLog(ctx))
+              assertTrue(ctx.instructedHas("NOTHING has changed"))
+              assertFalse(ctx.spokenHas("Starting on that now"))
+              assertEquals(listOf("check my unread emails"), ctx.state.inFlight)
+            },
+        ),
+        Scenario(
+            name = "S52 a locally-held task can be rushed too, by forwarding it",
+            guards = "an fx.enqueue entry has no durable doc to escalate — but must still be startable",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "first task")),
+                    effects(
+                        effect("enqueue", "task" to "a locally held task", "urgency" to "normal")),
+                    effects(effect("sendQueuedNow", "task" to "locally held")),
+                ),
+            assert = { ctx ->
+              // No pending doc exists, so nothing to nudge — forwarding reaches the same place.
+              assertEquals(listOf("forwardTask", "forwardTask"), callLog(ctx))
+              assertFalse(callLog(ctx).contains("sendQueuedNow"))
+              assertEquals(0, ctx.state.queue.size)
+              assertEquals(listOf("first task", "a locally held task"), ctx.state.inFlight)
+            },
+        ),
+        Scenario(
+            name = "S53 rushing \"the\" waiting task with two waiting asks which, and starts neither",
+            guards = "guessing the head starts the wrong task and reports the right one — silently",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("forwardToAgent", "text" to "find me a florist")),
+                    effects(effect("sendQueuedNow")), // which one?
+                ),
+            assert = { ctx ->
+              assertEquals(listOf("forwardTask", "queueTask", "queueTask"), callLog(ctx))
+              assertFalse(callLog(ctx).contains("sendQueuedNow"))
+              // Both still waiting, in order, and nothing spoken that claims otherwise.
+              assertEquals(
+                  listOf("book a table for tonight", "find me a florist"),
+                  ctx.state.queue.map { it.text })
+              assertTrue(ctx.instructedHas("NOTHING was started"))
+              assertFalse(ctx.spokenHas("Starting on that now"))
+            },
+        ),
+        Scenario(
+            name = "S54 rushing the only waiting task needs no naming",
+            guards = "the ambiguity guard must not make the ordinary case require an argument",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("sendQueuedNow")), // unambiguous: only one is waiting
+                ),
+            assert = { ctx ->
+              assertTrue(callLog(ctx).contains("sendQueuedNow"))
+              assertEquals(
+                  listOf("check my unread emails", "book a table for tonight"), ctx.state.inFlight)
+              assertTrue(ctx.spokenHas("Starting on that now"))
+            },
+        ),
+        Scenario(
+            name = "S55 an approval in a two-request turn is not pinned on a guess",
+            guards = "E1.3 — the approval names no task, and send-now made turns able to carry two again",
+            // An approval doc carries requestId/category/title/description and NOTHING about which
+            // user request it serves. The agent does not track that either, so it cannot be looked
+            // up. The honest move is to say so rather than attribute it.
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("sendQueuedNow", "task" to "book a table")), // two in one turn
+                    Step.Agent(approval("a-ambig", title = "Command Approval Required")),
+                ),
+            assert = { ctx ->
+              assertEquals(2, ctx.state.inFlight.size)
+              val nudge = ctx.voice.instructed.lastOrNull() ?: ""
+              assertTrue(nudge, nudge.contains("does NOT say which of them raised it"))
+              // Model-facing only: the user must never hear this read out.
+              assertFalse(ctx.spokenHas("does NOT say which"))
+              // It hands over both, as data, so she can describe rather than attribute.
+              assertTrue(nudge.contains("check my unread emails"))
+              assertTrue(nudge.contains("book a table for tonight"))
+            },
+        ),
+        Scenario(
+            name = "S56 a single-request turn gets no such warning",
+            guards = "the usual case is unambiguous — warning there would be noise the model has to weigh",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    Step.Agent(approval("a-clear", title = "Which restaurant?")),
+                ),
+            assert = { ctx ->
+              assertEquals(1, ctx.state.inFlight.size)
+              assertFalse(ctx.instructedHas("does NOT say which"))
+            },
+        ),
+        Scenario(
+            name = "S58 a forward that never starts is admitted to, not swallowed",
+            guards = "the immediate path fails too, and it is the common one — S48 only covered the held path",
+            steps =
+                listOf(
+                    Step.Do { ctx -> ctx.agent.failForwardTask() },
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                ),
+            assert = { ctx ->
+              // Nowhere, and claimed nowhere: not running, not waiting, not silently dropped.
+              assertEquals(emptyList<String>(), ctx.state.inFlight)
+              assertEquals(0, ctx.state.queue.size)
+              assertEquals(Mode.IDLE, ctx.state.mode)
+              assertTrue(ctx.spokenHas("couldn't get that started"))
+              // And never the lie the silence became — that it is underway.
+              assertFalse(ctx.spokenHas("on it"))
+            },
+        ),
+        Scenario(
+            name = "S59 starting fresh rotates the conversation when nothing is outstanding",
+            guards = "voice has a session of its own, so it must be resettable without touching the desktop",
+            steps = listOf(effects(effect("resetSession"))),
+            assert = { ctx ->
+              assertTrue(callLog(ctx).contains("resetSession"))
+              assertTrue(ctx.spokenHas("fresh start"))
+              assertEquals(emptyList<String>(), ctx.state.inFlight)
+              assertEquals(0, ctx.state.queue.size)
+            },
+        ),
+        Scenario(
+            name = "S60 starting fresh is refused while a task is running",
+            guards = "the running turn lives in the session being rotated away — it would be orphaned",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("resetSession")),
+                ),
+            assert = { ctx ->
+              assertFalse(callLog(ctx).contains("resetSession"))
+              assertEquals(listOf("book a table for tonight"), ctx.state.inFlight)
+              assertTrue(ctx.spokenHas("can't start fresh just yet"))
+              // Named, not just refused: what is in the way is what the user has to act on.
+              assertTrue(ctx.spokenHas("book a table for tonight"))
+            },
+        ),
+        Scenario(
+            name = "S61 starting fresh is refused while a request is waiting on the user",
+            guards = "an unanswered approval belongs to the turn that raised it, in the old session",
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    Step.Agent(approval("a-reset", title = "Which restaurant?")),
+                    effects(effect("resetSession")),
+                ),
+            assert = { ctx ->
+              assertFalse(callLog(ctx).contains("resetSession"))
+              assertEquals("a-reset", ctx.state.pendingApprovalId)
+              assertTrue(ctx.spokenHas("needs your answer"))
+            },
+        ),
+        Scenario(
+            name = "S62 starting fresh is refused while a task is still waiting",
+            guards = "a held task\u2019s pending doc lives under the old session — rotating strands it unrun",
+            // The case `mode` alone would get wrong: a held task can sit in the queue while the FSM
+            // reads idle, and it is exactly the work a rotation destroys most quietly.
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    effects(effect("resetSession")),
+                ),
+            assert = { ctx ->
+              assertFalse(callLog(ctx).contains("resetSession"))
+              assertEquals(listOf("check my unread emails"), ctx.state.queue.map { it.text })
+              assertTrue(ctx.spokenHas("is still waiting"))
+              assertTrue(ctx.spokenHas("check my unread emails"))
             },
         ),
     )
