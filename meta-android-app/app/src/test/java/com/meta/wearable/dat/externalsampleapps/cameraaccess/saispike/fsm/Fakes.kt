@@ -34,11 +34,28 @@ class FakeAgent(
   }
 
   override suspend fun queueTask(text: String, attachments: List<TaskAttachment>?): String {
-    calls += BridgeCall("queueTask", mapOf("text" to text, "attachments" to attachments))
-    if (queueStartsImmediately) throw TaskStartedImmediately()
-    if (queueFails) throw RuntimeException("queue failed")
-    return "p${++pendingSeq}"
+    if (queueStartsImmediately) {
+      calls += BridgeCall("queueTask", mapOf("text" to text, "attachments" to attachments))
+      throw TaskStartedImmediately()
+    }
+    if (queueFails) {
+      calls += BridgeCall("queueTask", mapOf("text" to text, "attachments" to attachments))
+      throw RuntimeException("queue failed")
+    }
+    val pendingId = "p${++pendingSeq}"
+    // Recorded on the call so a scenario can get the handle the agent will drain by.
+    calls +=
+        BridgeCall(
+            "queueTask",
+            mapOf("text" to text, "attachments" to attachments, "pendingId" to pendingId))
+    return pendingId
   }
+
+  /** The pendingId a recorded queueTask call handed back. */
+  fun pendingIdFor(call: BridgeCall): String? = call.args["pendingId"] as? String
+
+  /** Stand in for the agent draining its own queue and starting a held task as a fresh turn. */
+  fun drain(pendingId: String) = AgentEvent.QueuedTaskStarted(pendingId)
 
   override suspend fun cancelQueuedTask(pendingId: String): CancelOutcome {
     calls += BridgeCall("cancelQueuedTask", mapOf("pendingId" to pendingId))
