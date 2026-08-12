@@ -38,6 +38,7 @@ server (the agent link), and does almost nothing else itself.
 | `SAI_GLASSES_APP.md` | The architecture overview — read this first. |
 | `CONCIERGE_CLIENT_PROTOCOL.md` | The client half of the wire contract (endpoints, WS message tables, close codes, the device tools). Vendored here so the repo is self-contained. |
 | `ON_DEVICE_CHECK.md` | A runnable checklist for verifying a build on real glasses — eight checks, each naming what it exercises and how it fails. |
+| `VOICE_FSM.md` | The design of the conversation state machine this app owns — modes, effects, the admission rule, the races, and why each rule exists. Read before changing anything under `fsm/`. |
 | `DIRECTORY.md` | This file. |
 
 ---
@@ -104,6 +105,30 @@ below — the path still carries the app's earlier name).
 | `HangupPolicy.kt` | How/when a call ends (spoken goodbye, delays, terminal reasons). |
 | `HeldNudgeQueue.kt` | Defer nudges until a turn completes; flush on barge-in. |
 | `MachineSwitcher.kt` | The `switchMachine` transition without touching the live audio. |
+
+### The conversation state machine — `…/saispike/fsm/`
+
+What happens between the user speaking and the agent working, and back. Ported from the server; see
+[`VOICE_FSM.md`](VOICE_FSM.md) for why each rule exists. Everything except `Concierge.kt` is pure —
+no coroutines, no clock, no I/O — which is what makes the golden catalog runnable as JVM tests.
+
+**Not yet wired into `CallService`**: the app still runs the WebSocket path while the port is proven.
+
+| File (`…/saispike/fsm/`) | What it does |
+| --- | --- |
+| `State.kt` | The state, the modes, and the pure transitions over them. |
+| `Effects.kt` | The 15 things the model is allowed to make happen, and the parse boundary that drops anything else. |
+| `Ports.kt` | `AgentBridge` and `VoiceChannel` — the two seams — plus the agent event union. |
+| `Concierge.kt` | The orchestrator: one `Mutex`, the dispatch loop, the queue drain, the session projection. |
+| `AgentIngest.kt` | What an agent event means regardless of what the model says about it. |
+| `EffectCtx.kt` | The whole surface a handler gets; `state` is a live alias, not a copy. |
+| `TaskHandlers.kt` | `forwardToAgent` / `relayToAgent` — the admission rule. |
+| `ApprovalHandlers.kt` | `approve` / `deny` / `chooseOption`, including the offered-value guard. |
+| `QueueHandlers.kt` | `enqueue` / `sendQueuedNow` / `cancelQueued`, durable and not. |
+| `InterruptHandler.kt` | `interrupt` (the one-shot scope question) and `resetSession`. |
+| `Races.kt` | The three races against the agent's own drain, and their ordering constraints. |
+| `CostGuard.kt` | The two bounds on what an open microphone can cost. |
+| `Speech.kt` | Every line the FSM produces — `say` (verbatim) and `instruct` (model-only). |
 
 ### Support
 

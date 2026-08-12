@@ -9,8 +9,14 @@ To verify a build on hardware, start with [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK
 is obliged to do is written down here instead, in
 [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md) — the endpoints, the message tables, the
 close codes and the five device tools. Read that first; everything below describes how these modules
-meet it. The concierge service's own design (the FSM, billing, the cost guard) is deliberately **not**
-mirrored here: it is not this app's contract, and a copy would go stale without anything catching it.
+meet it.
+
+**The conversation state machine is now this app's**, and its design is
+[`VOICE_FSM.md`](VOICE_FSM.md) — modes, the effect grammar, the admission rule, the races, and why
+each rule exists. That is a change of ownership, not a copy: the FSM used to run server-side and was
+deliberately not described here, on the grounds that a mirror of someone else's design goes stale
+without anything catching it. What genuinely stays server-side — token minting, billing, the system
+prompt — is listed in §1 of that doc, because a fork needs to know what it still needs a server for.
 
 The DAT platform research this design rests on — the glasses platform comparison, the mic-access and
 Meta-AI-coexistence go/no-go findings, and the distribution constraints — is not linked either. Its
@@ -81,6 +87,7 @@ execution/trust boundary). They meet only as effects (up) and agent-events/nudge
 | `ActivityLog` / `ConciergeProtocol`  | Kotlin ports of the server's `core/activity-log.ts` and `core/nudges.ts` (`describeAgentEvent` with prompt-injection fencing — port verbatim; drift is caught by the cross-port parity fixtures, §8.1). Feed `getSaiStatus` + the UI activity view.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `GlassesGestureSession`              | DAT `DeviceSession` (no display/camera capability) reacting to the only temple gestures DAT surfaces: tap = mute/unmute Sai, tap-and-hold/doff/fold = end (all just `DeviceSessionState`; no gesture is remappable — see §6 "Glasses gestures").                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `SaiFiApp` / `MainActivity`     | App init (`Wearables.initialize` once); `MainActivity` is now just the DAT-registration deep-link callback host (`saiwearables`) — the CameraAccess sample UI was pruned in productization.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `fsm/` (13 files)                    | **The conversation state machine**, ported from the server: modes and transitions, the bounded effect grammar and its parse boundary, the admission rule that holds a mid-turn task instead of folding it in, the durable/non-durable queue split, the three races against the agent's own drain, the cost guard, and every line the FSM speaks. Everything but `Concierge.kt` is pure, which is what makes the 62-scenario golden catalog runnable as JVM tests; `Concierge.kt` serialises all four input kinds through one `Mutex`, because two forwards interleaving at a suspension point books the restaurant twice. Design: [`VOICE_FSM.md`](VOICE_FSM.md). **Not yet wired into `CallService`** — the WS path still drives calls while the port is proven.                        |
 
 ## 3. The client contract (frozen; the Kotlin app ports the browser reference client)
 
