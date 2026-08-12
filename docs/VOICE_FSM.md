@@ -26,13 +26,29 @@ So the split is:
 
 | Concern | Where | Why |
 | --- | --- | --- |
-| Gemini ephemeral token | **server** | The API key can never ship to a handset |
-| Billing / credit gate | **server** | Client-side metering is not a control |
-| System prompt + tool declarations | **server** | Model config, delivered per session |
-| Agent access, approval writes | **server** | The trust boundary |
+| Gemini credential | **either** | See "Two ways to authenticate" below |
+| System prompt + tool declarations | **server**, when you use one | Model config, delivered per session; a standalone build falls back to the bundled defaults |
+| Agent access, approval writes | **server** | Someone else's computer doing real work — this is the trust boundary, and the billed half |
 | **The FSM, spoken lines, nudges** | **this app** | The conversation is yours to change |
 
-A fork still needs a server for the first four. It does not need permission for the rest.
+### Two ways to authenticate
+
+Audio is a direct device↔Gemini Live session either way. Only the credential differs.
+
+- **Your own Gemini API key.** Enter it in settings; the app opens Live with it and never calls
+  `/v1/concierge/session` for a token. **The voice half then needs no Simular server at all** — which
+  is the point of this repo being public. You pay Google directly for what you use.
+- **A server-minted ephemeral token.** What the first-party build does: `POST /v1/concierge/session`
+  returns a `uses: 1` token with a ~2-minute window to start a session, so Simular's API key stays
+  server-side.
+
+**Voice is not billed.** Only agent calls are — the work Sai does on your machine, through
+`/v1/voice/message`. Talking to the concierge costs whatever your Gemini key costs you and nothing
+else.
+
+Your API key is a secret on a handset: it is stored encrypted, never logged, never included in the
+presenter feed or a bug report, and **never sent to a Simular endpoint**. It is your key and your
+Google bill; the server has no reason to see it.
 
 ## 2. The shape: pure core, thin driver
 
@@ -236,7 +252,9 @@ The FSM is ported and tested but not yet driving a call. The remaining work:
 1. `ConciergeClient` moves to `POST /v1/voice/message` + SSE `GET /v1/voice/stream`.
 2. `ConciergeSocket` is deleted; `CallController` delegates to the FSM instead of reacting to server
    directives; `AgentEventRouter` and `HeldNudgeQueue` fold in rather than running a second queue.
-3. The server's WebSocket and its copy of the FSM are removed.
+3. Bring-your-own-key lands: a settings field, encrypted storage, and bundled default
+   prompt/tools/voice so a build with no server configured is still runnable.
+4. The server's WebSocket and its copy of the FSM are removed.
 
 Until then this app still runs the WebSocket path, and the FSM here is inert.
 
