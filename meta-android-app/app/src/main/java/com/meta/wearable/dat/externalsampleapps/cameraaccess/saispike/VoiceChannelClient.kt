@@ -104,13 +104,48 @@ object VoiceChannelClient {
       }
 
   /**
+   * POST to one of the `/v1/voice` operations — cancel-queued, send-now, abort, reset, approve.
+   *
+   * A non-2xx throws [ConciergeHttpException] carrying the status, which the callers depend on: a
+   * 422 from `approve` is a rejected selection that must reach the FSM, and a 401/403/503 anywhere
+   * is permanent and ends the call rather than retrying.
+   */
+  suspend fun postOperation(
+      baseUrl: String,
+      bearerToken: String,
+      path: String,
+      body: JSONObject,
+  ): JSONObject =
+      withContext(Dispatchers.IO) {
+        val conn = (URL("$baseUrl/v1/voice/$path").openConnection() as HttpURLConnection)
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Authorization", "Bearer $bearerToken")
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 30_000
+        try {
+          conn.outputStream.use { it.write(body.toString().toByteArray()) }
+          val status = conn.responseCode
+          if (status !in 200..299) {
+            val err = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            throw ConciergeHttpException(status, "POST /v1/voice/$path failed ($status): $err")
+          }
+          val text = conn.inputStream.bufferedReader().use { it.readText() }
+          if (text.isBlank()) JSONObject() else JSONObject(text)
+        } finally {
+          conn.disconnect()
+        }
+      }
+
+  /**
    * Read the agent-event stream until the caller stops collecting or the connection drops.
    *
    * Suspends for the life of the stream. Cancellation closes the connection; a drop returns
    * normally, because reconnect policy belongs to the caller, not here — see ReconnectPolicy.
    *
    * Frames that do not parse are DROPPED rather than thrown: a newer server must not be able to end
-   * a call by sending something this build predates. Same rule as `dispatchServerMessage`.
+   * a call by sending something this build predates. Same rule the WS reader followed, and for the same reason.
    */
   suspend fun streamEvents(
       baseUrl: String,

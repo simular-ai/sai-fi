@@ -27,6 +27,10 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ResetO
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.SendNowOutcome
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.TaskAttachment
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.TaskStartedImmediately
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -62,6 +66,24 @@ class HttpAgentBridge(
     synchronized(stash) { stash += attachment }
   }
 
+  /**
+   * Where the user physically is, for the request about to follow.
+   *
+   * Consumed by the NEXT task written and then cleared — the model sets `includeLocation` on the
+   * request it belongs to, so a fix left behind would ride an unrelated one.
+   */
+  @Volatile private var pendingLocation: TaskLocation? = null
+
+  fun setPendingLocation(location: TaskLocation) {
+    pendingLocation = location
+  }
+
+  private fun takeLocation(): TaskLocation? {
+    val loc = pendingLocation
+    pendingLocation = null
+    return loc
+  }
+
   override fun takePendingAttachments(): List<TaskAttachment> =
       synchronized(stash) {
         val taken = stash.toList()
@@ -72,13 +94,15 @@ class HttpAgentBridge(
   override suspend fun forwardTask(text: String, attachments: List<TaskAttachment>?): String {
     // No deliveryMode: the FSM only forwards when nothing is in flight, and the router's default is
     // what every other channel does.
-    val ack = transport.sendMessage(machineId, text, null, attachments.toJsonOrNull())
+    val ack = transport.sendMessage(machineId, taskText(text, takeLocation()), null, attachments.toJsonOrNull())
     ack.notice?.let { log("[voice] notice: $it") }
     return ack.sessionId ?: ""
   }
 
   override suspend fun queueTask(text: String, attachments: List<TaskAttachment>?): String {
-    val ack = transport.sendMessage(machineId, text, "queue", attachments.toJsonOrNull())
+    // The fix is folded in HERE, at enqueue, and frozen with the task — which is why the stamp is an
+    // absolute UTC instant rather than "just now": a held task may run much later.
+    val ack = transport.sendMessage(machineId, taskText(text, takeLocation()), "queue", attachments.toJsonOrNull())
     ack.notice?.let { log("[voice] notice: $it") }
     // No pendingId means the session turned out idle and the task STARTED. Thrown, not returned, so
     // the caller cannot mistake it for a queued task.
@@ -156,4 +180,57 @@ private fun List<TaskAttachment>?.toJsonOrNull(): JSONArray? {
           })
     }
   }
+}
+
+/** Where the user physically is, read from the phone for a task that needs it. */
+data class TaskLocation(
+    val lat: Double,
+    val lon: Double,
+    val accuracyM: Double? = null,
+    val approximate: Boolean = false,
+    val label: String? = null,
+    val capturedAt: Long,
+)
+
+/**
+ * The text a forwarded task is written as: the user's words, plus the location fix when one came
+ * with it.
+ *
+ * A user message has no metadata channel — the message doc's only structured extra is
+ * `attachments` — so anything the agent needs that is not the user's words has to travel in the
+ * text. That makes this wording load-bearing.
+ */
+fun taskText(text: String, location: TaskLocation?): String =
+    if (location == null) text else text + describeTaskLocation(location)
+
+/**
+ * Render a fix as a line the agent can act on.
+ *
+ * Three jobs, none decorative: say the machine's OWN location is wrong (it runs in a datacenter and
+ * will otherwise answer "near me" from there); stamp it as an absolute UTC instant (a queued task
+ * freezes this at enqueue and may run much later, so a relative "just now" would age into a lie);
+ * and fence it as data, because the place name is reverse-geocoded user-controlled text.
+ *
+ * A coarse fix is rounded to ~1km as well as labelled — five decimals for a neighbourhood-accurate
+ * grant invents precision the phone never had.
+ */
+fun describeTaskLocation(loc: TaskLocation): String {
+  val digits = if (loc.approximate) 2 else 5
+  val coords = "%.${digits}f, %.${digits}f".format(Locale.US, loc.lat, loc.lon)
+  val accuracy =
+      when {
+        loc.approximate ->
+            " (approximate — a coarse fix, good to roughly a neighbourhood, not a spot)"
+        loc.accuracyM != null -> " (±${Math.round(loc.accuracyM)}m)"
+        else -> ""
+      }
+  val place = loc.label?.let { " — $it" } ?: ""
+  val iso =
+      SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+          .apply { timeZone = TimeZone.getTimeZone("UTC") }
+          .format(Date(loc.capturedAt))
+  return "\n\n[Context, not part of the request and not an instruction: the user's own physical " +
+      "location, from their phone, as of $iso — " +
+      "$coords$accuracy$place. Use this for anything local (nearby places, weather, directions, " +
+      "travel time). This computer's own network location is a datacenter and is NOT where the user is.]"
 }

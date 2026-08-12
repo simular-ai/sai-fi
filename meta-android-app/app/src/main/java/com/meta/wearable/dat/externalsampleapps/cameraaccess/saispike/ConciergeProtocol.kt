@@ -246,33 +246,3 @@ private fun summaryOrDone(e: JSONObject): String {
   val s = e.optString("summary")
   return if (s.isNotEmpty()) s else "done"
 }
-
-/**
- * Route one server→client frame to the right callback.
- *
- * Pure and Android-free on purpose: it lives here, beside the other cross-port helpers, rather than
- * inside [ConciergeSocket] — whose constructor needs a Looper and so cannot be built in a JVM unit
- * test. That is why the wire protocol had no parity coverage while the nudge STRINGS had five fixture
- * files. ConciergeSocketParityTest drives this with the committed `ws-messages.json`, so a server
- * variant with no branch here fails a test.
- *
- * Unknown types and malformed JSON are ignored rather than thrown: this runs on the socket reader
- * thread, and a newer server must not be able to end a call by sending a frame this build predates.
- */
-fun dispatchServerMessage(
-    raw: String,
-    onAgentEvent: (JSONObject) -> Unit,
-    onAgentActivity: (JSONObject) -> Unit,
-    onSpeak: (String) -> Unit,
-    onInstruct: (String) -> Unit,
-    onApprovalTimeout: () -> Unit,
-) {
-  val json = runCatching { JSONObject(raw) }.getOrNull() ?: return
-  when (json.optString("type")) {
-    "agent-event" -> json.optJSONObject("event")?.let(onAgentEvent)
-    "agent-activity" -> json.optJSONObject("event")?.let(onAgentActivity)
-    "speak" -> onSpeak(json.optString("text"))
-    "instruct" -> onInstruct(json.optString("text"))
-    "approval-timeout" -> onApprovalTimeout()
-  }
-}
