@@ -66,12 +66,7 @@ fun SettingsScreen(
     listState: LazyListState,
 ) {
   Column(modifier = Modifier.fillMaxSize()) {
-    Text(
-        "Settings",
-        style = MaterialTheme.typography.titleLarge,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-    )
-    HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+    ScreenHeader("Settings", s)
 
     LazyColumn(
         state = listState,

@@ -92,6 +92,39 @@ internal fun GroupHeader(title: String, modifier: Modifier = Modifier) {
 }
 
 /**
+ * Every screen's header: the title, the call-state chip, and the accent rule under both.
+ *
+ * One component because all three screens want the identical thing, and because the chip has to be on
+ * ALL of them. Call state is the one fact that outranks whatever tab you happen to be looking at — the
+ * call keeps running while you are in Settings or reading Logs, and a chip that only existed on Home
+ * meant checking whether you were still live cost a tab switch. The notification carries it too, but
+ * the notification is not on screen.
+ *
+ * Self-contained `Column` rather than two loose siblings so a caller can't accidentally put something
+ * between the title and its own rule. The rule is full-bleed while the title is inset, so the screens
+ * must NOT put horizontal padding on the parent — pad the content below this instead.
+ */
+@Composable
+internal fun ScreenHeader(title: String, s: CallController.State) {
+  Column {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+      CallStatusChip(
+          active = s.active,
+          reconnecting = s.reconnecting,
+          paused = s.paused,
+          muted = s.saiMuted,
+      )
+    }
+    HorizontalDivider(thickness = 1.dp, color = SaiTheme.colors.accent.copy(alpha = 0.35f))
+  }
+}
+
+/**
  * One titled card, sized by its content.
  *
  * This used to be a FIXED-HEIGHT box (96/180/280/132 dp) with its own inner `verticalScroll`, all

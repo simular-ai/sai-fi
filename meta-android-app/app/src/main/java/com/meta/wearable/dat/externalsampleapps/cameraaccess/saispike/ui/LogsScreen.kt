@@ -32,7 +32,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -61,77 +60,83 @@ fun LogsScreen(s: CallController.State) {
           }
           .trim()
 
-  Column(
-      modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+  // No horizontal padding on the outer Column: ScreenHeader's rule is full-bleed, so the padding goes
+  // on the content below it instead.
+  Column(modifier = Modifier.fillMaxSize()) {
+    ScreenHeader("Logs", s)
+    Column(
+        modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Text("Logs", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-      OutlinedButton(
-          border = saiEdge(),
-          enabled = copyText.isNotEmpty(),
-          onClick = { clipboard.setText(AnnotatedString(copyText)) },
-      ) {
-        Text("Copy")
-      }
-    }
-    if (s.active) {
-      var typed by remember { mutableStateOf("") }
+      // Copy sits BELOW the rule, with the header above it. It is an action on the stream rather than
+      // part of the screen's identity, and having it up beside the title made the header the only one
+      // in the app with a button in it.
       Row(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          modifier = Modifier.fillMaxWidth(),
+          modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+          horizontalArrangement = Arrangement.End,
       ) {
-        OutlinedTextField(
-            value = typed,
-            onValueChange = { typed = it },
-            label = { Text("Type a message") },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-        )
-        Button(
-            enabled = typed.isNotBlank(),
-            onClick = {
-              CallController.sendText(ctx, typed)
-              typed = ""
-            },
+        OutlinedButton(
+            border = saiEdge(),
+            enabled = copyText.isNotEmpty(),
+            onClick = { clipboard.setText(AnnotatedString(copyText)) },
         ) {
-          Text("Send")
+          Text("Copy")
         }
       }
-    }
-    val listState = rememberLazyListState()
-    // Auto-scroll as the stream grows AND as the last (streaming) entry's text lengthens —
-    // an in-place transcript update doesn't change the count, so key on both.
-    LaunchedEffect(entries.size, entries.lastOrNull()?.text) {
-      if (entries.isNotEmpty()) listState.animateScrollToItem(entries.lastIndex)
-    }
-    if (entries.isEmpty()) {
-      Text(
-          "Transcript and logs appear here during a call.",
-          style = MaterialTheme.typography.bodySmall,
-      )
-    } else {
-      LazyColumn(
-          state = listState,
-          modifier = Modifier.weight(1f).fillMaxWidth(),
-          verticalArrangement = Arrangement.spacedBy(2.dp),
-      ) {
-        items(entries, key = { it.id }) { entry ->
-          when (entry.kind) {
-            CallController.Kind.YOU ->
-                Text("you: ${entry.text}", style = MaterialTheme.typography.bodyMedium)
-            CallController.Kind.SAI ->
-                Text("sai: ${entry.text}", style = MaterialTheme.typography.bodyMedium)
-            CallController.Kind.LOG ->
-                Text(
-                    entry.text,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = JetBrainsMono,
-                )
+      if (s.active) {
+        var typed by remember { mutableStateOf("") }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+          OutlinedTextField(
+              value = typed,
+              onValueChange = { typed = it },
+              label = { Text("Type a message") },
+              singleLine = true,
+              modifier = Modifier.weight(1f),
+          )
+          Button(
+              enabled = typed.isNotBlank(),
+              onClick = {
+                CallController.sendText(ctx, typed)
+                typed = ""
+              },
+          ) {
+            Text("Send")
+          }
+        }
+      }
+      val listState = rememberLazyListState()
+      // Auto-scroll as the stream grows AND as the last (streaming) entry's text lengthens —
+      // an in-place transcript update doesn't change the count, so key on both.
+      LaunchedEffect(entries.size, entries.lastOrNull()?.text) {
+        if (entries.isNotEmpty()) listState.animateScrollToItem(entries.lastIndex)
+      }
+      if (entries.isEmpty()) {
+        Text(
+            "Transcript and logs appear here during a call.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+      } else {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+          items(entries, key = { it.id }) { entry ->
+            when (entry.kind) {
+              CallController.Kind.YOU ->
+                  Text("you: ${entry.text}", style = MaterialTheme.typography.bodyMedium)
+              CallController.Kind.SAI ->
+                  Text("sai: ${entry.text}", style = MaterialTheme.typography.bodyMedium)
+              CallController.Kind.LOG ->
+                  Text(
+                      entry.text,
+                      style = MaterialTheme.typography.bodySmall,
+                      fontFamily = JetBrainsMono,
+                  )
+            }
           }
         }
       }

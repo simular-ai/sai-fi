@@ -47,7 +47,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -92,22 +91,7 @@ fun HomeScreen(
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Text("Sai-Fi", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-      CallStatusChip(
-          active = s.active,
-          reconnecting = s.reconnecting,
-          paused = s.paused,
-          muted = s.saiMuted,
-      )
-    }
-    // The header's accent rule — the counterpart to the group rules in Settings, and the reason the
-    // app title reads as Sai's rather than as a label on a sample app.
-    HorizontalDivider(thickness = 1.dp, color = SaiTheme.colors.accent.copy(alpha = 0.35f))
+    ScreenHeader("Sai-Fi", s)
 
     // One scroll for the whole page. Sections are items rather than one big Column so that
     // adding a section later doesn't reintroduce the compose-everything-up-front cost.
