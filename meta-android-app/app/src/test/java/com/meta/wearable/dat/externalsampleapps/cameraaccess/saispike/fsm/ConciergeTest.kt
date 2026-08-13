@@ -59,7 +59,6 @@ class ConciergeTest {
     c.handleUserUtterance("email Dana")
 
     assertEquals("only the first task started", 1, agent.callsTo("forwardTask").size)
-    assertEquals(1, agent.callsTo("queueTask").size)
     assertEquals(listOf("email Dana"), c.getState().queue.map { it.text })
     assertTrue(
         "the user must hear it is waiting, not underway", voice.spokenHas("as soon as I'm done"))
@@ -89,37 +88,27 @@ class ConciergeTest {
 
     val order = agent.calls.map { it.method }
     assertTrue(
-        "take must precede the queue write, or the photo drains with someone else's task: $order",
-        order.indexOf("takePendingAttachments") < order.indexOf("queueTask"))
+        "the stash must be taken when the task is HELD, not when it drains — otherwise the photo " +
+            "leaves with whoever writes next: $order",
+        order.contains("takePendingAttachments"))
     assertEquals(listOf(photo), c.getState().queue.single().attachments)
   }
 
   @Test
-  fun `a durable write that fails is admitted to, and the task exists nowhere`() = runTest {
-    agent.queueFails = true
-    val c = concierge()
-    engine.script = { _, _ -> listOf(Effect.ForwardToAgent("first")) }
-    c.handleUserUtterance("first")
-    engine.script = { _, _ -> listOf(Effect.ForwardToAgent("second")) }
-    c.handleUserUtterance("second")
-
-    assertTrue(voice.spokenHas("couldn't get that queued up"))
-    assertTrue("it must not appear to be waiting", c.getState().queue.isEmpty())
-  }
-
-  @Test
-  fun `a queueTask that started immediately says nothing about waiting`() = runTest {
-    agent.queueStartsImmediately = true
+  fun `holding a task cannot fail, so nothing is ever apologised for`() = runTest {
+    // There used to be two tests here, for a durable write failing and for it turning out to have
+    // started immediately. Holding a task is a list append now — the agent is not told — so neither
+    // outcome exists. What still has to hold is that a held task is never described as running.
     val c = concierge()
     engine.script = { _, _ -> listOf(Effect.ForwardToAgent("first")) }
     c.handleUserUtterance("first")
     voice.spoken.clear()
-
     engine.script = { _, _ -> listOf(Effect.ForwardToAgent("second")) }
     c.handleUserUtterance("second")
 
-    assertTrue("it is running, not waiting", voice.spoken.isEmpty())
-    assertEquals(listOf("first", "second"), c.getState().inFlight)
+    assertEquals(listOf("second"), c.getState().queue.map { it.text })
+    assertEquals("only the first is running", listOf("first"), c.getState().inFlight)
+    assertTrue("it is named as waiting, behind something", voice.spokenHas("I'll start that"))
   }
 
   // ── the approval guard ─────────────────────────────────────────────────────
@@ -157,7 +146,10 @@ class ConciergeTest {
   }
 
   @Test
-  fun `one pick uses the singular field and two use the plural`() = runTest {
+  fun `a single-question card puts every pick in ONE group`() = runTest {
+    // The agent resolves a choice positionally, one group per question. An ordinary card asks one
+    // thing, so both picks belong to the same group — splitting them would claim answers to
+    // questions that were never asked.
     val opts = listOf(ApprovalOption("a", "A"), ApprovalOption("b", "B"))
 
     val c1 = concierge()
@@ -165,8 +157,7 @@ class ConciergeTest {
     engine.script = { _, _ -> listOf(Effect.ChooseOption(listOf("a"))) }
     c1.handleUserUtterance("a")
     var sel = agent.callsTo("resolveApproval").last().args["selection"] as ApprovalSelection
-    assertEquals("a", sel.selectedOption)
-    assertNull("a single pick is never sent as the plural", sel.selectedOptions)
+    assertEquals(listOf(listOf("a")), sel.selections)
 
     agent.calls.clear()
     val c2 = concierge()
@@ -177,8 +168,7 @@ class ConciergeTest {
     engine.script = { _, _ -> listOf(Effect.ChooseOption(listOf("a", "b"))) }
     c2.handleUserUtterance("both")
     sel = agent.callsTo("resolveApproval").last().args["selection"] as ApprovalSelection
-    assertEquals(listOf("a", "b"), sel.selectedOptions)
-    assertNull(sel.selectedOption)
+    assertEquals(listOf(listOf("a", "b")), sel.selections)
   }
 
   @Test
@@ -291,21 +281,26 @@ class ConciergeTest {
   // ── the drain ──────────────────────────────────────────────────────────────
 
   @Test
-  fun `the drain never forwards a durable entry — the agent starts those itself`() = runTest {
-    val c = concierge()
-    engine.script = { _, _ -> listOf(Effect.ForwardToAgent("first")) }
-    c.handleUserUtterance("first")
-    engine.script = { _, _ -> listOf(Effect.ForwardToAgent("second")) }
-    c.handleUserUtterance("second")
-    assertEquals(1, c.getState().queue.size)
+  fun `the drain starts a held task exactly once, however many turn-ending events arrive`() =
+      runTest {
+        // This used to assert the opposite: the drain had to SKIP an entry the agent held durably,
+        // or the task ran twice. Nothing else holds a copy now, so the drain is what starts it —
+        // and the doubling risk moved here, to the several events that all end a turn.
+        val c = concierge()
+        engine.script = { _, _ -> listOf(Effect.ForwardToAgent("first")) }
+        c.handleUserUtterance("first")
+        engine.script = { _, _ -> listOf(Effect.ForwardToAgent("second")) }
+        c.handleUserUtterance("second")
+        assertEquals(1, c.getState().queue.size)
 
-    engine.script = { _, _ -> emptyList() }
-    c.handleAgentEvent(AgentEvent.Complete())
+        engine.script = { _, _ -> emptyList() }
+        c.handleAgentEvent(AgentEvent.Complete())
+        c.handleAgentEvent(AgentEvent.Status(AgentStatus.IDLE))
+        c.handleAgentEvent(AgentEvent.Complete())
 
-    assertEquals(
-        "forwarding a durable entry here runs it twice", 1, agent.callsTo("forwardTask").size)
-    assertEquals("it stays queued for the agent to drain", 1, c.getState().queue.size)
-  }
+        assertEquals("started once, not once per turn-ending event", 2, agent.callsTo("forwardTask").size)
+        assertEquals(0, c.getState().queue.size)
+      }
 
   @Test
   fun `a model-enqueued task has no durable doc, so the drain does start it`() = runTest {

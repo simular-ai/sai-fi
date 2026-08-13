@@ -7,7 +7,12 @@
 // hallucinated by the model, mistranscribed from speech — must not be able to resolve a guardrail.
 // `allowOther` is the one exception, and it is explicit.
 //
-// Ported from cloud-api `services/concierge/voice/core/effect-handlers/approvals.ts`.
+// `denyApprovalKilledByAbort` also lives here. It was the last survivor of `Races.kt`, whose other
+// two guards existed only because the agent could start a task this FSM was holding. It cannot any
+// more — the queue never leaves the device — but an abort can still kill the turn an approval
+// belonged to, and that one is not a race with the queue at all.
+//
+// Ported from cloud-api `services/concierge/voice/core/effect-handlers/approvals.ts` and `races.ts`.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm
 
@@ -69,18 +74,17 @@ suspend fun applyChooseOption(ctx: EffectCtx, effect: Effect.ChooseOption) {
     }
   }
 
-  // Exactly one pick uses the singular field; two or more use the plural. A single-element list is
-  // never sent as `selectedOptions` — that shape is what askChoice reads back.
+  // Grouped per question on the way out — a spoken pick carries no question index, and the agent
+  // resolves them positionally.
   val selection =
-      if (effect.values.size == 1) ApprovalSelection(selectedOption = effect.values.first())
-      else ApprovalSelection(selectedOptions = effect.values)
+      ApprovalSelection(groupSelections(effect.values, ctx.state.pendingApprovalQuestions))
 
   try {
     ctx.agent.resolveApproval(id, ApprovalDecision.APPROVED, selection)
   } catch (e: Exception) {
-    // The bridge rejected it for something this guard cannot see — an un-offered value on a
-    // multi-question choice, say. Keep the pending state AND the timer so the choice is still
-    // resolvable, and tell the model to re-present.
+    // The agent rejected it for something this guard cannot see — most likely a question left
+    // unanswered, which it refuses rather than half-applying. Keep the pending state AND the timer
+    // so the choice is still resolvable, and tell the model to re-present.
     ctx.log("bridge rejected the selection: ${e.message}")
     ctx.voice.instruct(RESELECT_NUDGE)
     return
@@ -88,4 +92,25 @@ suspend fun applyChooseOption(ctx: EffectCtx, effect: Effect.ChooseOption) {
 
   ctx.clearApprovalTimer()
   ctx.state = ctx.state.noPendingApproval().copy(mode = Mode.WORKING, awaiting = null)
+}
+
+/**
+ * The abort killed the turn an approval belonged to.
+ *
+ * `denied` is the honest status: the user stopped the task, they did not agree to it. Without this
+ * the card can only expire, and the user hears "that request timed out" about work they cancelled
+ * minutes ago.
+ *
+ * Link-only cards are never resolved from here — they are the user's to finish in the app.
+ * Best-effort: the abort has already landed and a failure here must not undo it. Mutates no state;
+ * the callers do their own clear.
+ */
+suspend fun denyApprovalKilledByAbort(ctx: EffectCtx) {
+  val id = ctx.state.pendingApprovalId ?: return
+  if (ctx.state.pendingApprovalLinkOnly == true) return
+  try {
+    ctx.agent.resolveApproval(id, ApprovalDecision.DENIED)
+  } catch (e: Exception) {
+    ctx.log("could not deny the approval the abort killed: ${e.message}")
+  }
 }

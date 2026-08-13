@@ -1,17 +1,14 @@
 /* sai-fi — voice concierge. */
 
-// The bridge that turns the FSM's nine methods into six endpoints. Driven against a recording
-// transport — no network, so all of it runs in the JVM suite.
+// The bridge that turns the FSM's six methods into four `/v1/agents/*` endpoints. Driven against a
+// recording transport — no network, so all of it runs in the JVM suite.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ApprovalDecision
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ApprovalSelection
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.CancelOutcome
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ResetOutcome
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.SendNowOutcome
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.TaskAttachment
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.TaskStartedImmediately
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -22,11 +19,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 private class RecordingTransport(
-    var ack: VoiceAck = VoiceAck(sessionId = "S1", delivered = true),
     var responses: MutableMap<String, JSONObject> = mutableMapOf(),
     var throwOn: String? = null,
+    var throwStatus: Int = 400,
 ) : VoiceTransport {
-  data class Sent(val message: String, val deliveryMode: String?, val attachments: JSONArray?)
+  data class Sent(val message: String, val attachments: JSONArray?, val follow: Boolean)
 
   val sends = mutableListOf<Sent>()
   val posts = mutableListOf<Pair<String, JSONObject>>()
@@ -34,16 +31,15 @@ private class RecordingTransport(
   override suspend fun sendMessage(
       machineId: String,
       message: String,
-      deliveryMode: String?,
       attachments: JSONArray?,
-  ): VoiceAck {
-    sends += Sent(message, deliveryMode, attachments)
-    return ack
+      follow: Boolean,
+  ) {
+    sends += Sent(message, attachments, follow)
   }
 
   override suspend fun post(path: String, body: JSONObject): JSONObject {
     posts += path to body
-    if (path == throwOn) throw ConciergeHttpException(422, "Selection not among the offered options.")
+    if (path == throwOn) throw ConciergeHttpException(throwStatus, "rejected")
     return responses[path] ?: JSONObject()
   }
 }
@@ -55,38 +51,34 @@ class HttpAgentBridgeTest {
   private val photo =
       TaskAttachment(path = "uploads/a.jpg", name = "a.jpg", mime = "image/jpeg", size = 10)
 
-  // ── the two that do not map to an obvious endpoint ─────────────────────────
+  // ── which stream gets followed ─────────────────────────────────────────────
 
   @Test
-  fun `queueTask holds the task and hands back the pending id`() = runBlocking {
-    val t = RecordingTransport(ack = VoiceAck("S1", delivered = true, pendingId = "p7"))
-    assertEquals("p7", bridge(t).queueTask("book a table"))
-    assertEquals("queue", t.sends.single().deliveryMode)
+  fun `a new task is FOLLOWED — its response is the turn`() = runBlocking {
+    val t = RecordingTransport()
+    bridge(t).forwardTask("take a screenshot")
+    assertTrue(t.sends.single().follow)
   }
 
   @Test
-  fun `an ack with no pendingId means it STARTED, and that is thrown not returned`() {
-    // The server found the session idle and ran it. A caller that took this for a queued task would
-    // promise the user it is waiting, and hold an id that will never exist.
-    val t = RecordingTransport(ack = VoiceAck("S1", delivered = true, pendingId = null))
-    assertThrows(TaskStartedImmediately::class.java) { runBlocking { bridge(t).queueTask("go") } }
-  }
-
-  @Test
-  fun `forwardTask sends no deliveryMode — the router's default is what every channel does`() =
-      runBlocking {
-        val t = RecordingTransport()
-        bridge(t).forwardTask("take a screenshot")
-        assertNull(t.sends.single().deliveryMode)
-      }
-
-  @Test
-  fun `steer is a message with deliveryMode steer, never a new task`() = runBlocking {
+  fun `a steer is NOT followed — the turn it lands in is already being read`() = runBlocking {
+    // Reading a steer's own stream too would deliver every event of that turn a second time: the
+    // completion twice, the approval twice, the whole answer twice.
     val t = RecordingTransport()
     bridge(t).steer("make it 8pm")
-    assertEquals("steer", t.sends.single().deliveryMode)
+    assertEquals(false, t.sends.single().follow)
     assertTrue("a steer must not post to any operation", t.posts.isEmpty())
   }
+
+  @Test
+  fun `steer carries no location — a correction is about the task, not the user's whereabouts`() =
+      runBlocking {
+        val t = RecordingTransport()
+        val b = bridge(t)
+        b.setPendingLocation(TaskLocation(lat = 1.0, lon = 2.0, capturedAt = 0L))
+        b.steer("make it 8pm")
+        assertEquals("make it 8pm", t.sends.single().message)
+      }
 
   // ── the photo stash ────────────────────────────────────────────────────────
 
@@ -95,13 +87,16 @@ class HttpAgentBridgeTest {
     val b = bridge(RecordingTransport())
     b.addPendingAttachment(photo)
     assertEquals(listOf(photo), b.takePendingAttachments())
-    assertEquals("the second take must be empty", emptyList<TaskAttachment>(), b.takePendingAttachments())
+    assertEquals(
+        "the second take must be empty", emptyList<TaskAttachment>(), b.takePendingAttachments())
   }
 
   @Test
-  fun `a queued task carries its own photo on the durable write`() = runBlocking {
-    val t = RecordingTransport(ack = VoiceAck("S1", delivered = true, pendingId = "p1"))
-    bridge(t).queueTask("what is this", listOf(photo))
+  fun `a held task carries its OWN photo when it finally drains`() = runBlocking {
+    // The FSM takes the stash at enqueue and hands it back here at drain time, so the picture
+    // travels with the task that was captured for it rather than with whatever writes next.
+    val t = RecordingTransport()
+    bridge(t).forwardTask("what is this", listOf(photo))
     val sent = t.sends.single().attachments
     assertEquals(1, sent?.length())
     assertEquals("a.jpg", sent?.getJSONObject(0)?.getString("name"))
@@ -114,96 +109,96 @@ class HttpAgentBridgeTest {
     assertNull(t.sends.single().attachments)
   }
 
-  // ── the races ──────────────────────────────────────────────────────────────
+  // ── resetting the conversation ─────────────────────────────────────────────
 
   @Test
-  fun `cancel reports what actually happened, never assuming`() = runBlocking {
-    val lost = RecordingTransport()
-    lost.responses["cancel-queued"] = JSONObject().put("outcome", "already-started")
-    assertEquals(CancelOutcome.ALREADY_STARTED, bridge(lost).cancelQueuedTask("p1"))
+  fun `reset tells the rate limit apart from a failure`() = runBlocking {
+    // The two need different things said: "you've done this a lot lately" and "it broke".
+    val limited = RecordingTransport(throwOn = "new-session", throwStatus = 429)
+    assertEquals(ResetOutcome.RATE_LIMITED, bridge(limited).resetSession())
 
-    val won = RecordingTransport()
-    won.responses["cancel-queued"] = JSONObject().put("outcome", "cancelled")
-    assertEquals(CancelOutcome.CANCELLED, bridge(won).cancelQueuedTask("p1"))
+    val broken = RecordingTransport(throwOn = "new-session", throwStatus = 500)
+    assertEquals(ResetOutcome.FAILED, bridge(broken).resetSession())
+
+    assertEquals(ResetOutcome.OK, bridge(RecordingTransport()).resetSession())
   }
 
   @Test
-  fun `send-now reports already-started when the agent drained it first`() = runBlocking {
+  fun `reset and abort both name the machine`() = runBlocking {
     val t = RecordingTransport()
-    t.responses["send-now"] = JSONObject().put("outcome", "already-started")
-    assertEquals(SendNowOutcome.ALREADY_STARTED, bridge(t).sendQueuedNow("p1"))
-  }
-
-  @Test
-  fun `an unrecognised outcome degrades to the safe reading`() = runBlocking {
-    // A newer server saying something this build predates must not be read as the riskier answer:
-    // "cancelled" and "sent" are the ones that claim something happened.
-    val t = RecordingTransport()
-    t.responses["cancel-queued"] = JSONObject().put("outcome", "who-knows")
-    assertEquals(CancelOutcome.CANCELLED, bridge(t).cancelQueuedTask("p1"))
-    t.responses["reset"] = JSONObject().put("outcome", "who-knows")
-    assertEquals("an unknown reset outcome is a failure, not a success", ResetOutcome.FAILED, bridge(t).resetSession())
-  }
-
-  @Test
-  fun `reset passes rate-limited through as its own answer`() = runBlocking {
-    val t = RecordingTransport()
-    t.responses["reset"] = JSONObject().put("outcome", "rate-limited")
-    assertEquals(ResetOutcome.RATE_LIMITED, bridge(t).resetSession())
+    bridge(t).abort()
+    bridge(t).resetSession()
+    assertEquals(listOf("abort", "new-session"), t.posts.map { it.first })
+    assertTrue(t.posts.all { it.second.getString("machineId") == "m1" })
   }
 
   // ── approvals ──────────────────────────────────────────────────────────────
 
   @Test
-  fun `a selection is sent FLAT — the server groups it per question`() = runBlocking {
-    // A spoken pick carries no question index, and only the approval doc knows which question
-    // offered what. Grouping on the device would be a guess.
+  fun `selections go out GROUPED, one array per question`() = runBlocking {
+    // The agent resolves a choice positionally. The FSM did the grouping — it is the only thing
+    // that knows which question offered what — and the bridge must not flatten it back.
     val t = RecordingTransport()
     bridge(t)
-        .resolveApproval("a1", ApprovalDecision.APPROVED, ApprovalSelection(selectedOptions = listOf("a", "b")))
+        .resolveApproval(
+            "a1",
+            ApprovalDecision.APPROVED,
+            ApprovalSelection(listOf(listOf("a"), listOf("b", "c"))))
     val (path, body) = t.posts.single()
     assertEquals("approve", path)
     assertEquals("a1", body.getString("approvalId"))
-    assertEquals("approved", body.getString("decision"))
-    assertEquals(listOf("a", "b"), (0 until body.getJSONArray("values").length()).map {
-      body.getJSONArray("values").getString(it)
-    })
+    assertEquals("yes", body.getString("response"))
+    val groups = body.getJSONArray("selections")
+    assertEquals(2, groups.length())
+    assertEquals(1, groups.getJSONArray(0).length())
+    assertEquals(2, groups.getJSONArray(1).length())
   }
 
   @Test
-  fun `a single pick is sent as a one-element list, not omitted`() = runBlocking {
+  fun `the decision is the API's yes-no-always, not the doc's approved-denied`() = runBlocking {
     val t = RecordingTransport()
-    bridge(t).resolveApproval("a1", ApprovalDecision.APPROVED, ApprovalSelection(selectedOption = "sms"))
-    assertEquals(1, t.posts.single().second.getJSONArray("values").length())
+    val b = bridge(t)
+    b.resolveApproval("a1", ApprovalDecision.APPROVED, null)
+    b.resolveApproval("a2", ApprovalDecision.DENIED, null)
+    b.resolveApproval("a3", ApprovalDecision.APPROVED_ALWAYS, null)
+    assertEquals(listOf("yes", "no", "always"), t.posts.map { it.second.getString("response") })
   }
 
   @Test
-  fun `a decision with no selection sends no values at all`() = runBlocking {
+  fun `a decision with no selection sends no selections at all`() = runBlocking {
     val t = RecordingTransport()
     bridge(t).resolveApproval("a1", ApprovalDecision.DENIED, null)
     val body = t.posts.single().second
-    assertEquals("denied", body.getString("decision"))
-    assertTrue("a denial carries no picks", !body.has("values"))
+    assertTrue("a denial carries no picks", !body.has("selections"))
+  }
+
+  @Test
+  fun `an unanswered question is sent as an EMPTY group, not omitted`() = runBlocking {
+    // The agent refuses a resolution that does not answer every question, which is the outcome we
+    // want — it becomes a re-present nudge. Dropping the empty group instead would shift every
+    // later answer one question to the left and approve the card with the wrong picks.
+    val t = RecordingTransport()
+    bridge(t)
+        .resolveApproval(
+            "a1", ApprovalDecision.APPROVED, ApprovalSelection(listOf(emptyList(), listOf("b"))))
+    val groups = t.posts.single().second.getJSONArray("selections")
+    assertEquals(2, groups.length())
+    assertEquals(0, groups.getJSONArray(0).length())
   }
 
   @Test
   fun `a rejected selection PROPAGATES, so the FSM keeps the request answerable`() {
-    // The 422 is what makes chooseOption re-present. Swallowed, the FSM would clear its pending
-    // state while the doc stays pending — the call then waits forever for an answer it thinks it
+    // The 400 is what makes chooseOption re-present. Swallowed, the FSM would clear its pending
+    // state while the request stays open — the call then waits forever for an answer it thinks it
     // already gave.
     val t = RecordingTransport(throwOn = "approve")
     assertThrows(ConciergeHttpException::class.java) {
       runBlocking {
         bridge(t)
-            .resolveApproval("a1", ApprovalDecision.APPROVED, ApprovalSelection(selectedOption = "pigeon"))
+            .resolveApproval(
+                "a1", ApprovalDecision.APPROVED, ApprovalSelection(listOf(listOf("pigeon"))))
       }
     }
-  }
-
-  @Test
-  fun `abort posts with no body of its own`() = runBlocking {
-    val t = RecordingTransport()
-    bridge(t).abort()
-    assertEquals("abort", t.posts.single().first)
+    Unit
   }
 }

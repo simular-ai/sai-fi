@@ -52,24 +52,6 @@ class StateTest {
     assertSame(s, s.clearQueue())
   }
 
-  // ── startQueued ────────────────────────────────────────────────────────────
-
-  @Test
-  fun `startQueued moves the named task into the running turn and leaves mode alone`() {
-    val s = initialState().enqueue("book it", pendingId = "p1").enqueue("email them", pendingId = "p2")
-    val after = s.startQueued("p1")
-
-    assertEquals(listOf("email them"), after.queue.map { it.text })
-    assertEquals(listOf("book it"), after.inFlight)
-    assertEquals("startQueued must not decide the mode", Mode.IDLE, after.mode)
-  }
-
-  @Test
-  fun `an unknown pendingId is ignored — a task started elsewhere is not ours to claim`() {
-    val s = initialState().enqueue("book it", pendingId = "p1")
-    assertSame(s, s.startQueued("someone-elses"))
-  }
-
   // ── startTurn / endTurn ────────────────────────────────────────────────────
 
   @Test

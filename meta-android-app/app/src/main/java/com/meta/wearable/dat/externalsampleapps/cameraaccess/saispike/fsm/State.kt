@@ -74,15 +74,6 @@ data class QueuedTask(
      * second one attached. Binding it here is what makes "queued" safe for a vision task.
      */
     val attachments: List<TaskAttachment>? = null,
-    /**
-     * The durable pending doc this entry mirrors, once it has one.
-     *
-     * With the queue in Firestore the FSM entry is a DISPLAY copy: the agent decides when the task
-     * runs, and this id is how the two are matched up — to recognise the task in
-     * `queued-task-started`, and to cancel it by deleting the right doc. Absent only for an entry
-     * the model enqueued directly (`enqueue`), which never became a durable doc.
-     */
-    val pendingId: String? = null,
 )
 
 /** An option offered by a pending `choice` request. */
@@ -109,6 +100,14 @@ data class ConciergeState(
      * human-readable to answer from.
      */
     val pendingApprovalOptions: List<ApprovalOption>? = null,
+    /**
+     * The pending `choice` request's questions, when it asks more than one thing.
+     *
+     * Held only so a flat spoken answer can be put back into per-question groups on the way out;
+     * nothing else reads it. Null for the ordinary single-question card, where the flat list IS the
+     * grouping.
+     */
+    val pendingApprovalQuestions: List<ApprovalQuestion>? = null,
     /** Whether the pending `choice` accepts a free-form "something else" answer. */
     val pendingApprovalAllowOther: Boolean? = null,
     /** The pending approval is link-only (browser-completed) — not voice-resolvable. */
@@ -149,18 +148,16 @@ fun ConciergeState.withMode(mode: Mode): ConciergeState = copy(mode = mode)
 /**
  * Enqueue a held task. Urgent tasks jump to the front of the queue.
  *
- * "The front of the queue" means THIS list, which since the durable queue landed is only the whole
- * truth for entries with no `pendingId`. A task admitted through `forwardToAgent` lives in
- * `pending_user_messages` and the agent drains those in its own order; reordering the display copy
- * cannot change that. In practice they do not mix — admission always passes `normal`, and only the
- * model-driven `enqueue` effect passes `urgent` — but if they ever did, the spoken order and the
- * real one could disagree. Moving a DURABLE task up is `sendQueuedNow`, which actually starts it.
+ * This list is the WHOLE truth about held work: nothing was written anywhere else, and nothing but
+ * this FSM will ever start these tasks. So the spoken order and the real order cannot disagree, and
+ * moving one up is just `sendQueuedNow` forwarding it.
+ *
+ * The flip side is that held work does not survive the call. See `hasOutstandingWork`.
  */
 fun ConciergeState.enqueue(
     text: String,
     urgency: Urgency = Urgency.NORMAL,
     attachments: List<TaskAttachment>? = null,
-    pendingId: String? = null,
 ): ConciergeState {
   val item =
       QueuedTask(
@@ -169,7 +166,6 @@ fun ConciergeState.enqueue(
           // Empty is stored as absent, matching the TS spread — an empty list and no list must not
           // be two different things downstream.
           attachments = attachments?.takeIf { it.isNotEmpty() },
-          pendingId = pendingId?.takeIf { it.isNotEmpty() },
       )
   return copy(queue = if (urgency == Urgency.URGENT) listOf(item) + queue else queue + item)
 }
@@ -187,25 +183,6 @@ fun ConciergeState.clearQueue(): ConciergeState = if (queue.isEmpty()) this else
 fun ConciergeState.removeQueued(index: Int): ConciergeState =
     if (index < 0 || index >= queue.size) this
     else copy(queue = queue.filterIndexed { i, _ -> i != index })
-
-/**
- * Move a held task into the running turn, by the durable doc's id.
- *
- * The agent starts queued work on its own schedule now, so this is the FSM catching up with a
- * decision it did not make: the entry leaves the queue and becomes what `interrupt` would stop.
- * Unknown ids are ignored — a task started from another surface is not ours to claim.
- *
- * Deliberately does NOT touch `mode`.
- */
-fun ConciergeState.startQueued(pendingId: String): ConciergeState {
-  val index = queue.indexOfFirst { it.pendingId == pendingId }
-  if (index < 0) return this
-  val item = queue[index]
-  return copy(
-      queue = queue.filterIndexed { i, _ -> i != index },
-      inFlight = inFlight + item.text,
-  )
-}
 
 /**
  * A task has actually reached the agent and is now running.
@@ -245,9 +222,13 @@ fun ConciergeState.isWorking(): Boolean = mode == Mode.WORKING
  * True when there is outstanding work, so the conversation must not be rotated away.
  *
  * Keyed on the three things that OUTLIVE a rotation rather than on `mode`: a running turn's stream
- * and a held task's pending doc both belong to the session being replaced, and an unanswered
- * approval belongs to the turn that raised it. `mode` would be the wrong test — it can read `idle`
- * with a task still queued, which is precisely the case that must refuse.
+ * belongs to the session being replaced, an unanswered approval belongs to the turn that raised it,
+ * and a queued task was promised to the user out loud. `mode` would be the wrong test — it can read
+ * `idle` with a task still queued, which is precisely the case that must refuse.
+ *
+ * The queue is in memory only, so it does not survive the CALL either. That is a real loss and it is
+ * deliberate: nothing the agent holds can be started behind the FSM's back, which is what the three
+ * races used to guard against. Dropping a call drops the promise with it.
  */
 fun ConciergeState.hasOutstandingWork(): Boolean =
     inFlight.isNotEmpty() || queue.isNotEmpty() || pendingApprovalId != null
@@ -266,6 +247,34 @@ fun ConciergeState.noPendingApproval(): ConciergeState =
         pendingApprovalPrompt = null,
         pendingApprovalLinkOnly = null,
         pendingApprovalOptions = null,
+        pendingApprovalQuestions = null,
         pendingApprovalAllowOther = null,
         pendingApprovalType = null,
     )
+
+/**
+ * Put a flat list of picked values back into one group per question.
+ *
+ * A value lands in the FIRST question that offered it, and each value is used once — so two
+ * questions offering the same label do not both claim the same answer. Values nothing offered (a
+ * free-text answer to an `allowOther` question) go to the first question that accepts free text, and
+ * failing that to the first question, which is where a single-question card puts everything.
+ *
+ * A question left with no pick yields an EMPTY group, deliberately. The agent refuses the whole
+ * resolution rather than applying half of it, and that refusal is what gets the model to ask again.
+ * Inventing a pick to make the shape valid would answer for the user.
+ */
+fun groupSelections(values: List<String>, questions: List<ApprovalQuestion>?): List<List<String>> {
+  if (questions.isNullOrEmpty()) return listOf(values)
+  val groups = List(questions.size) { mutableListOf<String>() }
+  for (value in values) {
+    val offered = questions.indexOfFirst { q -> q.options.any { it.value == value } }
+    val index =
+        when {
+          offered >= 0 -> offered
+          else -> questions.indexOfFirst { it.allowOther }.takeIf { it >= 0 } ?: 0
+        }
+    groups[index] += value
+  }
+  return groups.map { it.toList() }
+}

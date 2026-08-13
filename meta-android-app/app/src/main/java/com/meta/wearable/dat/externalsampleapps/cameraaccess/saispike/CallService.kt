@@ -157,11 +157,12 @@ class CallService : Service() {
   private val netCallback =
       object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-          // Network came back (Wi-Fi↔cellular, tunnel, etc.). Only nudge the concierge WS, and only
-          // when it's actually down (kick() no-ops if connected) — never tear down a healthy socket.
+          // Network came back (Wi-Fi↔cellular, tunnel, etc.). Nothing to reconnect on the agent
+          // side any more: the concierge holds a connection only while a turn is streaming, and a
+          // turn that dropped cannot be rejoined — it is closed out rather than resumed.
+          //
           // The Live session self-heals on its own onClosed → scheduleLiveReconnect, so we don't
-          // force-remint it here (that would drop the current turn on every network blip).
-          if (callActive && !audioPaused) concierge?.kick()
+          // force-remint it here either (that would drop the current turn on every network blip).
         }
       }
 

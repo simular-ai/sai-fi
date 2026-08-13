@@ -16,35 +16,21 @@ package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm
  * Admission: held when an approval is pending OR anything is already in flight. Both mean the
  * agent's turn is not free, and folding a second request into it is how one task's context leaks
  * into another's.
+ *
+ * Holding is a purely local act — the server is not told, and nothing but [maybeDrainQueue] will
+ * ever start a held task. That is what keeps the spoken order honest, and it is also why a dropped
+ * call loses the promise.
  */
 suspend fun applyForwardToAgent(ctx: EffectCtx, effect: Effect.ForwardToAgent) {
   val heldBehindApproval = ctx.state.pendingApprovalId != null
 
   if (heldBehindApproval || ctx.state.inFlight.isNotEmpty()) {
-    // Taken BEFORE the durable write: photos left on the bridge belong to whoever writes next, so a
-    // held task must carry its own or drain with the wrong picture attached.
+    // Taken off the bridge now, not when the task drains: the stash belongs to whoever writes next,
+    // so a held task that leaves its photo there would drain with someone else's picture attached.
     val attachments = ctx.agent.takePendingAttachments()
-    var queued = true
-
-    try {
-      val pendingId = ctx.agent.queueTask(effect.text, attachments)
-      ctx.state = ctx.state.enqueue(effect.text, Urgency.NORMAL, attachments, pendingId)
-    } catch (e: TaskStartedImmediately) {
-      // The session turned out idle and it started. It is running, not waiting — say nothing about
-      // holding it.
-      ctx.state = ctx.state.startTurn(effect.text)
-      queued = false
-    } catch (e: Exception) {
-      // The task now exists NOWHERE — not durably, not in the FSM — and the attachments went with
-      // it. Silence here is a user waiting for work nothing ever took.
-      ctx.log("queueTask failed: ${e.message}")
-      ctx.state = ctx.state.copy(interruptScopeAsked = null)
-      ctx.voice.say(COULD_NOT_HOLD_TASK)
-      queued = false
-    }
-
-    if (!queued) return
-
+    ctx.state = ctx.state.enqueue(effect.text, Urgency.NORMAL, attachments)
+    // Nothing was sent, so there is nothing to fail and nothing to apologise for. The task exists
+    // here and only here until `maybeDrainQueue` forwards it.
     ctx.voice.say(
         if (heldBehindApproval) QUEUED_BEHIND_APPROVAL
         else queuedBehindTask(ctx.state.inFlight.last()))

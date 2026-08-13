@@ -50,8 +50,6 @@ fun agentEventToJson(e: AgentEvent): JSONObject =
               }
       is AgentEvent.ApprovalResolved ->
           JSONObject().put("type", "approval-resolved").put("id", e.id).put("status", e.status)
-      is AgentEvent.QueuedTaskStarted ->
-          JSONObject().put("type", "queued-task-started").put("pendingId", e.pendingId)
       is AgentEvent.SessionState ->
           JSONObject().put("type", "session-state").apply {
             e.running?.let { put("running", it) }

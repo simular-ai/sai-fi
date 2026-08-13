@@ -27,11 +27,6 @@ fun ingestAgentEvent(
     log: (String) -> Unit = {},
 ): ConciergeState =
     when (event) {
-      // The agent drained one of our held tasks and is running it. We did not start this turn, so
-      // this is the only notice we get — without it `inFlight` says nothing is running while the
-      // agent works, and she would keep calling a task "next" after it began.
-      is AgentEvent.QueuedTaskStarted -> state.startQueued(event.pendingId)
-
       is AgentEvent.Status -> applyAgentStatus(state, event.status)
 
       // Internal agent activity the user doesn't hear — deliberately does NOT reset the dead-air
@@ -72,6 +67,7 @@ fun ingestAgentEvent(
             pendingApprovalLinkOnly = event.isLinkOnly,
             pendingApprovalType = event.approvalType,
             pendingApprovalOptions = event.options,
+            pendingApprovalQuestions = event.questions,
             pendingApprovalAllowOther = event.allowOther,
             // Link-only requests can't be resolved by voice — the user completes them in the
             // browser — so the next utterance is NOT their answer.

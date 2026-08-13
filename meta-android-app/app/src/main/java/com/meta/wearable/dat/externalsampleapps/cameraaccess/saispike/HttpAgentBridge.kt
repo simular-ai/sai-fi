@@ -1,32 +1,28 @@
 /* sai-fi — voice concierge. */
 
-// The FSM's AgentBridge, over HTTP.
+// The FSM's AgentBridge, over the ordinary agent API.
 //
-// Nine methods against six endpoints on `/v1/voice/*`, plus a photo stash that never leaves the
-// device. This is the whole write side of a call: start work, hold it, cancel it, escalate it, stop
-// it, rotate the conversation, resolve an approval.
+// Six methods against four endpoints on `/v1/agents/*`, plus a photo stash that never leaves the
+// device. This is the whole write side of a call: start work, steer it, stop it, rotate the
+// conversation, resolve an approval.
 //
-// Two of the nine do NOT map to an obvious endpoint, and both matter:
+// There is no endpoint for HOLDING a task, because holding one is not something the server is told
+// about — the queue lives in the FSM and nothing else can start what is in it. `queueTask`,
+// `cancelQueuedTask` and `sendQueuedNow` used to be here, against a durable pending doc; what they
+// bought was a held task surviving a dropped call, and what they cost was three races against the
+// agent draining that doc behind the FSM's back. See docs/VOICE_FSM.md.
 //
-//   queueTask uses the same POST /message as forwardTask, with deliveryMode=queue. If the server
-//   finds the session idle it starts the task instead of holding it, and the ack comes back with no
-//   pendingId — which is TaskStartedImmediately, thrown so a caller cannot go on to promise the user
-//   it is waiting, or hold an id that will never exist.
-//
-//   resolveApproval goes to /v1/voice/approve rather than /v1/agents/approve, because that route
-//   wants selections already grouped one array per question and a spoken pick carries no question
-//   index. The grouping needs the approval doc's payload, which is server-side.
+// `steer` is the one method whose endpoint is not obvious: it is the same POST /message as
+// forwardTask. The router folds a message into a running turn on its own, which is what steering
+// means, so there is nothing extra to say.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.AgentBridge
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ApprovalDecision
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ApprovalSelection
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.CancelOutcome
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ResetOutcome
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.SendNowOutcome
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.TaskAttachment
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.TaskStartedImmediately
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -36,14 +32,25 @@ import org.json.JSONObject
 
 /** The HTTP calls this bridge makes, as one seam — so the FSM can be driven without a network. */
 interface VoiceTransport {
+  /**
+   * Send a message.
+   *
+   * Returns once the agent has ACCEPTED it, not once the turn is done — this runs inside the FSM's
+   * mutex, and the FSM needs that mutex to handle the events this very message is about to produce.
+   * Throws when the agent refuses it.
+   *
+   * @param follow whether this message's response stream is the one to read. True for a new task,
+   *   whose stream carries the turn. False for a steer: it lands in a turn that is already being
+   *   read, so its own stream would deliver every event a second time.
+   */
   suspend fun sendMessage(
       machineId: String,
       message: String,
-      deliveryMode: String?,
       attachments: JSONArray?,
-  ): VoiceAck
+      follow: Boolean,
+  )
 
-  /** POST to one of the `/v1/voice` operations. Returns the parsed body; throws on a non-2xx. */
+  /** POST to one of the `/v1/agents` operations. Returns the parsed body; throws on a non-2xx. */
   suspend fun post(path: String, body: JSONObject): JSONObject
 }
 
@@ -57,8 +64,8 @@ class HttpAgentBridge(
    * Photos captured for whatever writes next.
    *
    * Stays on the device: a held task takes its own copy at enqueue (the FSM calls
-   * [takePendingAttachments] before the durable write), so a later capture cannot ride along with
-   * it. Synchronized because captures arrive on the DAT callback thread.
+   * [takePendingAttachments] when it holds one), so a later capture cannot ride along with it.
+   * Synchronized because captures arrive on the DAT callback thread.
    */
   private val stash = mutableListOf<TaskAttachment>()
 
@@ -91,73 +98,83 @@ class HttpAgentBridge(
         taken
       }
 
+  /**
+   * Forward a task and follow its turn.
+   *
+   * The location fix is folded in HERE and frozen with the text — which is why the stamp is an
+   * absolute UTC instant rather than "just now". A held task takes its fix when it is HELD, not when
+   * it drains, and it may drain much later.
+   *
+   * Returns the empty string: on this API the response is the turn's event stream, so no session id
+   * comes back. Nothing reads it — the FSM keeps no session identity on purpose (see State.kt).
+   */
   override suspend fun forwardTask(text: String, attachments: List<TaskAttachment>?): String {
-    // No deliveryMode: the FSM only forwards when nothing is in flight, and the router's default is
-    // what every other channel does.
-    val ack = transport.sendMessage(machineId, taskText(text, takeLocation()), null, attachments.toJsonOrNull())
-    ack.notice?.let { log("[voice] notice: $it") }
-    return ack.sessionId ?: ""
+    transport.sendMessage(
+        machineId, taskText(text, takeLocation()), attachments.toJsonOrNull(), follow = true)
+    return ""
   }
 
-  override suspend fun queueTask(text: String, attachments: List<TaskAttachment>?): String {
-    // The fix is folded in HERE, at enqueue, and frozen with the task — which is why the stamp is an
-    // absolute UTC instant rather than "just now": a held task may run much later.
-    val ack = transport.sendMessage(machineId, taskText(text, takeLocation()), "queue", attachments.toJsonOrNull())
-    ack.notice?.let { log("[voice] notice: $it") }
-    // No pendingId means the session turned out idle and the task STARTED. Thrown, not returned, so
-    // the caller cannot mistake it for a queued task.
-    return ack.pendingId ?: throw TaskStartedImmediately()
-  }
-
+  /**
+   * Steer the running turn.
+   *
+   * The same endpoint as a new task, deliberately: the router folds a message into a turn already
+   * running, which is exactly what steering is. No location — a correction mid-turn is about the
+   * task, not about where the user is standing.
+   */
   override suspend fun steer(text: String) {
-    transport.sendMessage(machineId, text, "steer", null)
-  }
-
-  override suspend fun cancelQueuedTask(pendingId: String): CancelOutcome {
-    val res = transport.post("cancel-queued", JSONObject().put("pendingId", pendingId))
-    return if (res.optString("outcome") == "already-started") CancelOutcome.ALREADY_STARTED
-    else CancelOutcome.CANCELLED
-  }
-
-  override suspend fun sendQueuedNow(pendingId: String): SendNowOutcome {
-    val res = transport.post("send-now", JSONObject().put("pendingId", pendingId))
-    return if (res.optString("outcome") == "already-started") SendNowOutcome.ALREADY_STARTED
-    else SendNowOutcome.SENT
+    transport.sendMessage(machineId, text, null, follow = false)
   }
 
   override suspend fun abort() {
-    transport.post("abort", JSONObject())
+    transport.post("abort", JSONObject().put("machineId", machineId))
   }
 
+  /**
+   * Rotate onto a fresh conversation.
+   *
+   * A 429 is the rate limit, and it is worth telling apart from a failure: "you've done this a lot
+   * lately" and "it broke" need different things said to the user.
+   */
   override suspend fun resetSession(): ResetOutcome =
-      when (transport.post("reset", JSONObject()).optString("outcome")) {
-        "ok" -> ResetOutcome.OK
-        "rate-limited" -> ResetOutcome.RATE_LIMITED
-        else -> ResetOutcome.FAILED
+      try {
+        transport.post("new-session", JSONObject().put("machineId", machineId))
+        ResetOutcome.OK
+      } catch (e: ConciergeHttpException) {
+        if (e.status == 429) ResetOutcome.RATE_LIMITED else ResetOutcome.FAILED
+      } catch (e: Exception) {
+        log("new-session failed: ${e.message}")
+        ResetOutcome.FAILED
       }
 
   /**
    * Resolve an approval.
    *
-   * A rejected selection comes back 422 and the transport throws — which is exactly what the FSM
+   * A rejected selection comes back 400 and the transport throws — which is exactly what the FSM
    * wants: it keeps the request pending, keeps its timer, and nudges the model to re-present.
-   * Swallowing it would clear the FSM's pending state while the doc stays pending, and the call
+   * Swallowing it would clear the FSM's pending state while the request stays open, and the call
    * would deadlock waiting for an answer it believes it already gave.
+   *
+   * `selections` is positional, one non-empty group per question; the FSM grouped them on the way
+   * here. An empty group is sent as-is rather than dropped — the agent refuses the whole resolution,
+   * which is the honest outcome for a question the user never answered, and silently omitting it
+   * would approve the card with an answer missing.
    */
   override suspend fun resolveApproval(
       id: String,
       decision: ApprovalDecision,
       selection: ApprovalSelection?,
   ) {
-    val values =
-        selection?.selectedOptions ?: selection?.selectedOption?.let { listOf(it) } ?: emptyList()
     val body =
         JSONObject().apply {
           put("approvalId", id)
-          put("decision", decision.wire)
-          // FLAT on purpose — the server groups them per question, because a spoken pick carries no
-          // question index and only the approval doc knows which question offered what.
-          if (values.isNotEmpty()) put("values", JSONArray().apply { values.forEach { put(it) } })
+          put("response", decision.wire)
+          selection?.selections?.takeIf { it.isNotEmpty() }?.let { groups ->
+            put(
+                "selections",
+                JSONArray().apply {
+                  groups.forEach { g -> put(JSONArray().apply { g.forEach { put(it) } }) }
+                })
+          }
         }
     transport.post("approve", body)
   }

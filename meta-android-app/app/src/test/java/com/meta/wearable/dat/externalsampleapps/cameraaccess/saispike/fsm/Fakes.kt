@@ -6,6 +6,10 @@
 // FakeChannel records `say` and `instruct` SEPARATELY on purpose. The two are not interchangeable
 // (one is spoken verbatim, one never reaches the user), and every recorded regression in this area
 // was a line going out on the wrong one. A fake that merged them could not catch that.
+//
+// FakeAgent has no queue of its own. It used to, because the server held one and the two could
+// disagree — the agent starting a task the FSM still believed was waiting. The queue is local now,
+// so the FSM's own queue IS the whole truth and a second copy here could only lie about it.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm
 
@@ -14,15 +18,10 @@ data class BridgeCall(val method: String, val args: Map<String, Any?> = emptyMap
 
 class FakeAgent(
     var forwardFails: Boolean = false,
-    var queueFails: Boolean = false,
-    var queueStartsImmediately: Boolean = false,
-    var cancelOutcome: CancelOutcome = CancelOutcome.CANCELLED,
-    var sendNowOutcome: SendNowOutcome = SendNowOutcome.SENT,
     var resetOutcome: ResetOutcome = ResetOutcome.OK,
     var resolveFails: Boolean = false,
 ) : AgentBridge {
   val calls = mutableListOf<BridgeCall>()
-  private var pendingSeq = 0
   var stash: List<TaskAttachment> = emptyList()
 
   fun callsTo(method: String) = calls.filter { it.method == method }
@@ -33,61 +32,9 @@ class FakeAgent(
     return "S-test"
   }
 
-  override suspend fun queueTask(text: String, attachments: List<TaskAttachment>?): String {
-    if (queueStartsImmediately) {
-      calls += BridgeCall("queueTask", mapOf("text" to text, "attachments" to attachments))
-      throw TaskStartedImmediately()
-    }
-    if (queueFails) {
-      calls += BridgeCall("queueTask", mapOf("text" to text, "attachments" to attachments))
-      throw RuntimeException("queue failed")
-    }
-    val pendingId = "p${++pendingSeq}"
-    // Recorded on the call so a scenario can get the handle the agent will drain by.
-    calls +=
-        BridgeCall(
-            "queueTask",
-            mapOf("text" to text, "attachments" to attachments, "pendingId" to pendingId))
-    return pendingId
-  }
-
-  /** The pendingId a recorded queueTask call handed back. */
-  fun pendingIdFor(call: BridgeCall): String? = call.args["pendingId"] as? String
-
-  /** Stand in for the agent draining its own queue and starting a held task as a fresh turn. */
-  fun drain(pendingId: String) = AgentEvent.QueuedTaskStarted(pendingId)
-
-  /**
-   * The agent drained this task before the user's cancel or rush arrived.
-   *
-   * Both `cancelQueuedTask` and `sendQueuedNow` then report `already-started`, which is the race the
-   * FSM must check rather than assume — claiming a cancellation that did not happen is how "that's
-   * off the list" gets said about a task that is still booking a table.
-   */
-  fun raceLostFor(pendingId: String?) {
-    racedIds += pendingId ?: return
-  }
-
-  /** The next durable write fails — a Firestore write can be rejected. */
-  fun failQueueTask() {
-    queueFails = true
-  }
-
   /** The next immediate forward fails — the machine is unreachable, or the write is rejected. */
   fun failForwardTask() {
     forwardFails = true
-  }
-
-  private val racedIds = mutableSetOf<String>()
-
-  override suspend fun cancelQueuedTask(pendingId: String): CancelOutcome {
-    calls += BridgeCall("cancelQueuedTask", mapOf("pendingId" to pendingId))
-    return if (pendingId in racedIds) CancelOutcome.ALREADY_STARTED else cancelOutcome
-  }
-
-  override suspend fun sendQueuedNow(pendingId: String): SendNowOutcome {
-    calls += BridgeCall("sendQueuedNow", mapOf("pendingId" to pendingId))
-    return if (pendingId in racedIds) SendNowOutcome.ALREADY_STARTED else sendNowOutcome
   }
 
   override fun takePendingAttachments(): List<TaskAttachment> {
@@ -100,25 +47,6 @@ class FakeAgent(
   /** A glasses capture landing on the bridge, waiting for whatever writes next. */
   fun addPendingAttachment(attachment: TaskAttachment) {
     stash = stash + attachment
-  }
-
-  /**
-   * What is actually still in the DURABLE queue — written by queueTask, removed by a successful
-   * cancelQueuedTask.
-   *
-   * Distinct from the FSM's own queue on purpose: several scenarios turn on the two disagreeing,
-   * because clearing only the display copy leaves the agent to start the task anyway.
-   */
-  fun queuedTexts(): List<String> {
-    val queued = LinkedHashMap<String, String>() // pendingId -> text
-    for (call in calls) {
-      when (call.method) {
-        "queueTask" -> (call.args["pendingId"] as? String)?.let { queued[it] = call.args["text"] as String }
-        "cancelQueuedTask" -> queued.remove(call.args["pendingId"] as? String)
-        "sendQueuedNow" -> queued.remove(call.args["pendingId"] as? String)
-      }
-    }
-    return queued.values.toList()
   }
 
   override suspend fun steer(text: String) {

@@ -47,8 +47,17 @@ sealed interface AgentEvent {
       val approvalType: String,
       val isLinkOnly: Boolean,
       val allowAlways: Boolean,
-      /** Present for `select` approvals — the options to choose from. */
+      /** Present for `select` approvals — every option across every question, flattened. */
       val options: List<ApprovalOption>? = null,
+      /**
+       * The same options still grouped BY QUESTION, when the card asks more than one thing.
+       *
+       * `options` is what the model picks from and what gets read back, and a spoken pick carries no
+       * question index — but the agent resolves a choice positionally, one group per question. This
+       * is the only thing that can put a flat answer back into the right slots. See
+       * [groupSelections].
+       */
+      val questions: List<ApprovalQuestion>? = null,
       val multiple: Boolean? = null,
       /** Whether the select also accepts a free-form "something else" answer. */
       val allowOther: Boolean? = null,
@@ -64,8 +73,6 @@ sealed interface AgentEvent {
   data class Complete(val summary: String? = null) : AgentEvent
 
   data class Error(val text: String) : AgentEvent
-
-  data class QueuedTaskStarted(val pendingId: String) : AgentEvent
 
   /** The FSM's own projection, echoed back for the client's activity log. */
   data class SessionState(
@@ -85,51 +92,41 @@ sealed interface AgentEvent {
   data class Notice(val text: String) : AgentEvent
 }
 
-/** How the concierge resolves a pending approval. */
+/**
+ * How the concierge resolves a pending approval.
+ *
+ * The wire values are the agent API's `response` field, which is a plain yes/no/always — not the
+ * `approved` / `denied` status the approval doc ends up carrying.
+ */
 enum class ApprovalDecision(val wire: String) {
-  APPROVED("approved"),
-  APPROVED_ALWAYS("approved_always"),
-  DENIED("denied"),
+  APPROVED("yes"),
+  APPROVED_ALWAYS("always"),
+  DENIED("no"),
 }
 
-/**
- * How to resolve a `select` approval — the chosen option value(s).
- *
- * Exactly one pick uses the singular field and two-or-more uses the plural; a single-element list is
- * never sent as `selectedOptions`. That shape is what `askChoice` reads back, and writing the answer
- * anywhere else approves the card while silently dropping what the user chose.
- */
-data class ApprovalSelection(
-    val selectedOption: String? = null,
-    val selectedOptions: List<String>? = null,
+/** One question on a `choice` card, with what it offered. */
+data class ApprovalQuestion(
+    val options: List<ApprovalOption>,
+    val multiple: Boolean = false,
+    val allowOther: Boolean = false,
 )
 
-/** What actually happened to a held task we tried to drop. */
-enum class CancelOutcome {
-  CANCELLED,
-  ALREADY_STARTED,
-}
-
-/** What actually happened to a held task we tried to escalate. */
-enum class SendNowOutcome {
-  SENT,
-  ALREADY_STARTED,
-}
+/**
+ * How to resolve a `choice` approval: the picked values, ONE GROUP PER QUESTION, in the card's own
+ * order.
+ *
+ * Positional, and the agent requires a non-empty group for every question — a partial answer is
+ * refused rather than half-applied. That refusal is the desired outcome: it surfaces as a rejected
+ * resolution the model is told to re-present, instead of a card approved with a question silently
+ * unanswered.
+ */
+data class ApprovalSelection(val selections: List<List<String>>)
 
 enum class ResetOutcome {
   OK,
   RATE_LIMITED,
   FAILED,
 }
-
-/**
- * `queueTask` found the session idle, so the task STARTED instead of being held.
- *
- * Thrown rather than returned so a caller cannot mistake it for a queued task and go on to promise
- * the user it is waiting, or hold a `pendingId` that will never exist.
- */
-class TaskStartedImmediately :
-    Exception("the session was idle — the task started instead of queueing")
 
 interface AgentBridge {
   /**
@@ -140,33 +137,6 @@ interface AgentBridge {
    * immediate path and the adapter drains its stash as before.
    */
   suspend fun forwardTask(text: String, attachments: List<TaskAttachment>? = null): String
-
-  /**
-   * Hold a task so it runs as its OWN turn once the agent is free — durably.
-   *
-   * Unlike [forwardTask] this starts nothing: the AGENT drains it at its next turn boundary. It
-   * therefore survives a dropped call, which an in-memory queue does not — and a queued task the
-   * user was promised out loud is the worst thing to lose on a reconnect.
-   *
-   * @throws TaskStartedImmediately when the session turned out idle and it started instead.
-   */
-  suspend fun queueTask(text: String, attachments: List<TaskAttachment>? = null): String
-
-  /**
-   * Drop a held task before it runs.
-   *
-   * Never reports a cancellation that did not happen: this races the agent's drain by construction,
-   * and guessing would mean telling the user something is off the list while it books their table.
-   */
-  suspend fun cancelQueuedTask(pendingId: String): CancelOutcome
-
-  /**
-   * Escalate a held task into the RUNNING turn without stopping anything — "do that first".
-   *
-   * The only other escalation available is abort-and-restart, which destroys the running task to make
-   * room: a bad trade for a user who asked for a reorder, not a cancellation.
-   */
-  suspend fun sendQueuedNow(pendingId: String): SendNowOutcome
 
   /**
    * Detach the photos captured for the task about to be queued, so nothing later picks them up.

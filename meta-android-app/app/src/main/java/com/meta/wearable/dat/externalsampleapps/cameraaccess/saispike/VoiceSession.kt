@@ -1,6 +1,6 @@
 /* sai-fi — voice concierge. */
 
-// One call's concierge: the FSM, its two ports, and the event stream that drives it.
+// One call's concierge: the FSM, its two ports, and the turn streams that drive it.
 //
 // This replaces ConciergeSocket. The socket carried effects UP to a server-side FSM and brought
 // speak/instruct back DOWN; now the FSM is here, so effects go straight into it and the only thing
@@ -8,6 +8,12 @@
 //
 // What that removes is a whole class of round trip: an interrupt used to be a WS frame, a server
 // decision and a directive back. It is now a function call.
+//
+// There is no persistent connection either. A turn's events arrive on the response to the message
+// that started it, so this session is CONNECTED ONLY WHILE THE AGENT IS WORKING — which is why
+// there is no reconnect loop here any more, and why a reset is just a POST. What it costs is
+// anything that happens between turns: an approval resolved in the desktop app while nothing is
+// running is not heard.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 
@@ -19,6 +25,7 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.Concie
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.DecisionEngine
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.DecisionInput
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.Effect
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.isWorking
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.Timer
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.VoiceChannel
 import android.os.Handler
@@ -30,6 +37,17 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+
+/**
+ * Told to the FSM when a turn's stream ends without the agent saying how it went.
+ *
+ * Phrased as a fact about THIS DEVICE's knowledge, not about the task: the agent may well still be
+ * working, and the one thing that must not be said is that it finished. The model turns this into
+ * whatever it wants to tell the user; what matters here is that it never hears "done".
+ */
+const val TURN_STREAM_LOST =
+    "lost the connection to the agent partway through, so the outcome of that task is unknown — " +
+        "it may still be running"
 
 /**
  * The FSM's voice out, wired to the Live model.
@@ -110,17 +128,25 @@ class VoiceSession(
         override suspend fun sendMessage(
             machineId: String,
             message: String,
-            deliveryMode: String?,
             attachments: JSONArray?,
-        ): VoiceAck =
-            VoiceChannelClient.sendMessage(
-                baseUrl = baseUrl,
-                bearerToken = token(),
-                machineId = machineId,
-                message = message,
-                deliveryMode = deliveryMode,
-                attachments = attachments,
-            )
+            follow: Boolean,
+        ) {
+          val stream =
+              VoiceChannelClient.openMessageStream(
+                  baseUrl = baseUrl,
+                  bearerToken = token(),
+                  machineId = machineId,
+                  message = message,
+                  attachments = attachments,
+              )
+          // A steer lands in a turn already being read; reading its stream too would deliver every
+          // event of that turn a second time.
+          if (!follow) {
+            stream.discard()
+            return
+          }
+          followTurn(stream)
+        }
 
         override suspend fun post(path: String, body: JSONObject): JSONObject =
             VoiceChannelClient.postOperation(baseUrl, token(), path, body.put("machineId", machineId))
@@ -137,7 +163,7 @@ class VoiceSession(
           log = onLog,
       )
 
-  private var streamJob: Job? = null
+  private var turnJob: Job? = null
   @Volatile private var active = false
 
   private val guard =
@@ -191,7 +217,52 @@ class VoiceSession(
 
   fun start() {
     active = true
-    openStream()
+  }
+
+  /**
+   * Read a turn's events until it ends, off the FSM's lock.
+   *
+   * Launched rather than awaited: the send that produced this stream is running inside the FSM's
+   * mutex, and every event here needs that same mutex. Awaiting would deadlock the call on its own
+   * first task.
+   *
+   * A drop is NOT reconnected. The stream belongs to one turn, and there is no way to rejoin a turn
+   * already in progress — so the honest thing is to stop following it. The FSM would otherwise sit
+   * in `working` forever, so the turn is closed out here on the way past.
+   */
+  private fun followTurn(stream: VoiceChannelClient.TurnStream) {
+    turnJob?.cancel()
+    turnJob =
+        scope.launch {
+          try {
+            onConnectionChange(true)
+            stream.read(
+                onEvent = { event ->
+                  // The log and the nudge router see every event; the FSM decides what it means.
+                  onAgentEvent(event)
+                  concierge.handleAgentEvent(event)
+                },
+                onLog = onLog,
+            )
+          } catch (e: ConciergeHttpException) {
+            onLog("[voice] turn stream error ${e.status}: ${e.message}")
+            if (ReconnectPolicy.isPermanent(e.status)) {
+              onLog("[voice] rejected permanently (${e.status}) — ending the call")
+              onPermanentFailure(e.status)
+              return@launch
+            }
+          } catch (e: Exception) {
+            onLog("[voice] turn stream dropped: ${e.message}")
+          } finally {
+            onConnectionChange(false)
+          }
+          // Whatever ended the stream, the turn is over as far as this device can tell. Told to the
+          // FSM as an error rather than a completion: a dropped stream is not a finished task, and
+          // reporting it as one is how "all done" gets said about work that may still be running.
+          if (active && concierge.getState().isWorking()) {
+            concierge.handleAgentEvent(AgentEvent.Error(TURN_STREAM_LOST))
+          }
+        }
   }
 
   /** The model's tool calls, straight into the FSM. No round trip. */
@@ -205,61 +276,10 @@ class VoiceSession(
 
   fun close() {
     active = false
-    streamJob?.cancel()
-    streamJob = null
+    turnJob?.cancel()
+    turnJob = null
     guard.dispose()
     concierge.stop()
-  }
-
-  /** Re-open the stream now — the network came back and a backoff wait would just add latency. */
-  fun kick() {
-    if (active) openStream()
-  }
-
-  /**
-   * Read the agent-event stream, reconnecting until the call ends.
-   *
-   * A drop is not a fault: the connection is open for the whole call and networks change. A
-   * PERMANENT rejection is different — 401/403/503 will not fix themselves, so it ends the call
-   * rather than retrying forever.
-   */
-  private fun openStream() {
-    streamJob?.cancel()
-    streamJob =
-        scope.launch {
-          var backoff = ReconnectPolicy.INITIAL_BACKOFF_MS
-          while (active && isActive) {
-            try {
-              onConnectionChange(true)
-              VoiceChannelClient.streamEvents(
-                  baseUrl = baseUrl,
-                  bearerToken = token(),
-                  machineId = machineId,
-                  onEvent = { event ->
-                    // The log and the nudge router see every event; the FSM decides what it means.
-                    onAgentEvent(event)
-                    concierge.handleAgentEvent(event)
-                  },
-                  onLog = onLog,
-              )
-              // A clean end means the server closed it; reconnect on the same terms as a drop.
-              backoff = ReconnectPolicy.INITIAL_BACKOFF_MS
-            } catch (e: ConciergeHttpException) {
-              if (ReconnectPolicy.isPermanent(e.status)) {
-                onLog("[voice] stream rejected permanently (${e.status}) — ending the call")
-                onPermanentFailure(e.status)
-                return@launch
-              }
-              onLog("[voice] stream error ${e.status}: ${e.message}")
-            } catch (e: Exception) {
-              onLog("[voice] stream dropped: ${e.message}")
-            }
-            if (!active) return@launch
-            onConnectionChange(false)
-            delay(backoff)
-            backoff = ReconnectPolicy.nextBackoff(backoff)
-          }
-        }
   }
 
   /** What the FSM currently believes, for tests and the activity view. */

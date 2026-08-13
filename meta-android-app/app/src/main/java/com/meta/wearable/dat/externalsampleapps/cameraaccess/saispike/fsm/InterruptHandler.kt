@@ -29,17 +29,8 @@ suspend fun applyInterrupt(ctx: EffectCtx) {
     ctx.log("interrupt is ambiguous over $outstanding outstanding — asking")
     ctx.state = ctx.state.copy(interruptScopeAsked = true)
     ctx.voice.say(interruptScopeQuestion(ctx.state.inFlight, ctx.state.queue.map { it.text }))
-    // Nothing else happens: no abort, no durable delete, no other state change.
+    // Nothing else happens: no abort, no state change beyond the flag.
     return
-  }
-
-  // Durable docs are deleted BEFORE the abort. The other way round, the abort ends the turn and the
-  // agent drains the next queued doc seconds later — so "stop" would launch the next task. The
-  // `started` half is ignored here because the abort on the next line stops it anyway.
-  val toDrop = ctx.state.queue.toList()
-  if (toDrop.isNotEmpty()) {
-    val result = dropDurably(ctx, toDrop)
-    ctx.log("interrupt dropped ${result.dropped.size} held task(s)")
   }
 
   ctx.agent.abort()
@@ -57,7 +48,7 @@ suspend fun applyInterrupt(ctx: EffectCtx) {
 /**
  * Rotate onto a fresh conversation.
  *
- * Refused while anything is outstanding: a held task's pending doc and a live turn both belong to
+ * Refused while anything is outstanding: a held task and a live turn both belong to
  * the session being replaced, and an unanswered approval belongs to the turn that raised it.
  * Rotating under them orphans work nobody is reading.
  *

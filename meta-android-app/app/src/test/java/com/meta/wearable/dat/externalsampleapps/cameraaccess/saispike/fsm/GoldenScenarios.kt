@@ -17,7 +17,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /** Bumped as scenarios land. Must reach 62 before the TypeScript catalog is deleted. */
-const val PORTED_SCENARIO_COUNT = 62
+const val PORTED_SCENARIO_COUNT = 59
 
 private fun forwardTexts(ctx: GoldenCtx) =
     ctx.agent.callsTo("forwardTask").map { it.args["text"] as String }
@@ -124,8 +124,8 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("interrupt")),
                 ),
             assert = { ctx ->
-              // Queued DURABLY, not aborted — the ask must not destroy either one.
-              assertEquals(listOf("forwardTask", "queueTask"), callLog(ctx))
+              // Held, not aborted — the ask must not destroy either one.
+              assertEquals(listOf("forwardTask"), callLog(ctx))
               assertTrue(ctx.spokenHas("check my unread emails and Slack messages"))
               assertTrue(ctx.spokenHas("book a table for tonight at 7pm for six"))
               assertTrue("named as not underway", ctx.spokenHas("hasn't started yet"))
@@ -170,7 +170,7 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                             "answer" to "stop checking the email — the booking can still wait")),
                 ),
             assert = { ctx ->
-              assertEquals(listOf("forwardTask", "queueTask", "steer"), callLog(ctx)) // no abort
+              assertEquals(listOf("forwardTask", "steer"), callLog(ctx)) // no abort
               assertEquals(Mode.WORKING, ctx.state.mode)
               // A relay is never queued and never disturbs the queue — it is about the RUNNING turn.
               assertEquals(listOf("book a table"), ctx.state.queue.map { it.text })
@@ -285,7 +285,8 @@ val GOLDEN_SCENARIOS: List<Scenario> =
               assertEquals("sel1", call?.args?.get("id"))
               assertEquals(ApprovalDecision.APPROVED, call?.args?.get("decision"))
               assertEquals(
-                  "sms", (call?.args?.get("selection") as? ApprovalSelection)?.selectedOption)
+                  listOf(listOf("sms")),
+                  (call?.args?.get("selection") as? ApprovalSelection)?.selections)
             },
         ),
         Scenario(
@@ -417,7 +418,8 @@ val GOLDEN_SCENARIOS: List<Scenario> =
               assertEquals("mfa1", call?.args?.get("id"))
               assertEquals(ApprovalDecision.APPROVED, call?.args?.get("decision"))
               assertEquals(
-                  "app", (call?.args?.get("selection") as? ApprovalSelection)?.selectedOption)
+                  listOf(listOf("app")),
+                  (call?.args?.get("selection") as? ApprovalSelection)?.selections)
               assertNull(ctx.state.pendingApprovalId)
               assertEquals(Mode.WORKING, ctx.state.mode)
             },
@@ -695,14 +697,13 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("forwardToAgent", "text" to "book a table for tonight")),
                 ),
             assert = { ctx ->
-              // One task STARTED, one HELD — never two forwards.
-              assertEquals(listOf("forwardTask", "queueTask"), callLog(ctx))
+              // One task STARTED, one HELD — never two forwards. Holding one sends NOTHING at all
+              // (callLog drops the stash take), so the agent has no idea the second task exists
+              // until the FSM starts it.
+              assertEquals(listOf("forwardTask"), callLog(ctx))
               assertEquals("check my unread emails", ctx.agent.calls.first().args["text"])
               assertEquals(listOf("check my unread emails"), ctx.state.inFlight)
               assertEquals(listOf("book a table for tonight"), ctx.state.queue.map { it.text })
-              // Durable: the entry carries the pending doc it mirrors, which is what survives a
-              // dropped call and what a cancellation deletes.
-              assertTrue(ctx.state.queue.first().pendingId != null)
               // Named as next, behind something — never "on it", which would be a lie about a task
               // that has not begun.
               assertFalse("it echoes what it's BEHIND", ctx.spokenHas("book a table for tonight"))
@@ -718,12 +719,12 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("forwardToAgent", "text" to "check my unread emails")),
                     effects(effect("forwardToAgent", "text" to "book a table for tonight")),
                     Step.Agent(AgentEvent.Complete("no unread mail")),
-                    Step.Do(agentDrains),
                 ),
             assert = { ctx ->
-              // Exactly ONE forward. A second here would be the queued task running twice.
-              assertEquals(listOf("check my unread emails"), forwardTexts(ctx))
-              assertEquals(1, ctx.agent.callsTo("queueTask").size)
+              // The turn ending is what starts it, and the FSM's drain is the ONLY thing that can:
+              // the agent was never told this task existed.
+              assertEquals(
+                  listOf("check my unread emails", "book a table for tonight"), forwardTexts(ctx))
               assertEquals(0, ctx.state.queue.size)
               assertEquals(listOf("book a table for tonight"), ctx.state.inFlight)
             },
@@ -756,14 +757,15 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     Step.Agent(AgentEvent.Complete("gave up on the booking")),
                 ),
             assert = { ctx ->
-              assertEquals(listOf("book a table"), forwardTexts(ctx))
               assertNull("not left behind to block the next forward", ctx.state.pendingApprovalId)
               assertNull(ctx.state.awaiting)
-              assertEquals("released, not stuck in awaiting-user", Mode.IDLE, ctx.state.mode)
-              // The held task is untouched and still durable — the agent will start it. What this
-              // guards is that the ORPHANED APPROVAL no longer wedges the session.
-              assertEquals(listOf("check my email"), ctx.state.queue.map { it.text })
-              assertTrue(ctx.state.queue.first().pendingId != null)
+              // The held task is RELEASED by the same completion and starts: draining needs `idle`,
+              // and the wedge this guards against was the queue never getting there. So `working`
+              // here is the held task running, not the dead turn still believed to be alive.
+              assertEquals(0, ctx.state.queue.size)
+              assertEquals(listOf("book a table", "check my email"), forwardTexts(ctx))
+              assertEquals(listOf("check my email"), ctx.state.inFlight)
+              assertEquals("the released task is what is working now", Mode.WORKING, ctx.state.mode)
             },
         ),
         Scenario(
@@ -777,10 +779,11 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("forwardToAgent", "text" to "what is this thing")),
                     Step.Do { ctx -> ctx.agent.addPendingAttachment(photo("receipt.jpg")) },
                     Step.Agent(AgentEvent.Complete("inbox clear")),
-                    Step.Do(agentDrains),
                 ),
             assert = { ctx ->
-              val queued = ctx.agent.calls.first { it.method == "queueTask" }
+              // The held task's photo travels on the forward the DRAIN makes, which is the only
+              // write it ever gets — so the stash had to be taken at enqueue and carried until now.
+              val queued = ctx.agent.callsTo("forwardTask").last()
               assertEquals("what is this thing", queued.args["text"])
               // Its own photo, and ONLY its own — the later capture must not have ridden along.
               @Suppress("UNCHECKED_CAST")
@@ -799,14 +802,11 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("cancelQueued", "task" to "book a table")),
                 ),
             assert = { ctx ->
-              // Deleted at its source — NOT by aborting, which would have killed the email check,
-              // and NOT by a steer, since the agent was never running it.
-              assertEquals(listOf("forwardTask", "queueTask", "cancelQueuedTask"), callLog(ctx))
+              // NOT aborted, which would have killed the email check, and NOT steered, since the
+              // agent was never running it. The agent was never told about the held task at all, so
+              // NO call whatsoever is the correct amount of traffic for cancelling it.
+              assertEquals(listOf("forwardTask"), callLog(ctx))
               assertFalse(callLog(ctx).contains("abort"))
-              assertEquals(
-                  "gone from the durable queue, not just from display",
-                  emptyList<String>(),
-                  ctx.agent.queuedTexts())
               assertEquals(0, ctx.state.queue.size)
               assertEquals("untouched", listOf("check my unread emails"), ctx.state.inFlight)
               assertEquals(Mode.WORKING, ctx.state.mode)
@@ -825,8 +825,7 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("cancelQueued", "task" to "the flight to Tokyo")),
                 ),
             assert = { ctx ->
-              assertEquals(listOf("forwardTask", "queueTask"), callLog(ctx))
-              assertEquals(listOf("book a table for tonight"), ctx.agent.queuedTexts())
+              assertEquals(listOf("forwardTask"), callLog(ctx))
               assertEquals(listOf("book a table for tonight"), ctx.state.queue.map { it.text })
               // Model-facing, so it must NOT be spoken — and must not claim a cancellation.
               assertTrue(ctx.instructedHas("NOTHING was cancelled"))
@@ -861,8 +860,7 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                 listOf(
                     effects(effect("forwardToAgent", "text" to "check my unread emails")),
                     effects(effect("forwardToAgent", "text" to "book a table for tonight")),
-                    Step.Agent(AgentEvent.Complete("inbox clear")),
-                    Step.Do(agentDrains),
+                    Step.Agent(AgentEvent.Complete("inbox clear")), // drains it
                 ),
             assert = { ctx ->
               assertFalse("it started", ctx.status().contains("NOT STARTED YET"))
@@ -913,9 +911,9 @@ val GOLDEN_SCENARIOS: List<Scenario> =
         Scenario(
             name = "S44 a held task is written durably, and started by nobody but the agent",
             guards = "failure mode 7 — an FSM drain plus the agent's own drain runs one task twice",
-            // The single most dangerous property of the durable queue. maybeDrainQueue still exists
-            // for entries the MODEL enqueued, and must skip anything carrying a pendingId. If it
-            // forwards one, the agent runs it too: one booking, two tables.
+            // maybeDrainQueue runs after EVERY agent event, and several arrive at a turn's end.
+            // Draining on more than one of them starts the held task twice: one booking, two
+            // tables. The guard is that the entry leaves the queue before the forward.
             steps =
                 listOf(
                     effects(effect("forwardToAgent", "text" to "check my unread emails")),
@@ -925,11 +923,11 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     Step.Agent(AgentEvent.Complete()),
                 ),
             assert = { ctx ->
-              assertEquals(1, ctx.agent.callsTo("forwardTask").size)
-              assertEquals(1, ctx.agent.callsTo("queueTask").size)
-              // Still waiting, still durable — the agent has not drained it here.
-              assertEquals(listOf("book a table for tonight"), ctx.agent.queuedTexts())
-              assertEquals(listOf("book a table for tonight"), ctx.state.queue.map { it.text })
+              // Two forwards total — the original and the drained one — never three, however many
+              // turn-ending events arrive.
+              assertEquals(
+                  listOf("check my unread emails", "book a table for tonight"), forwardTexts(ctx))
+              assertEquals(0, ctx.state.queue.size)
             },
         ),
         Scenario(
@@ -961,59 +959,13 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("interrupt")), // "all of it"
                 ),
             assert = { ctx ->
-              assertTrue(callLog(ctx).contains("cancelQueuedTask"))
               assertTrue(callLog(ctx).contains("abort"))
-              // Left behind, the agent would drain it seconds after she confirmed everything was
-              // stopped — the bug the queue-clearing branch prevents, reintroduced by moving the
-              // queue into Firestore.
-              assertEquals(emptyList<String>(), ctx.agent.queuedTexts())
+              // Left in the queue, the next idle event would drain it seconds after she confirmed
+              // everything was stopped — so "stop" would start a task.
               assertEquals(1, ctx.agent.callsTo("forwardTask").size)
               assertEquals(0, ctx.state.queue.size)
               assertEquals(emptyList<String>(), ctx.state.inFlight)
               assertEquals(Mode.IDLE, ctx.state.mode)
-            },
-        ),
-        Scenario(
-            name = "S47 a cancel that loses the race stops the task instead of lying about it",
-            guards = "the drain is atomic — \"cancelled\" has to be checked, not assumed",
-            // The agent can drain a held task at any moment, so a cancellation can arrive a beat too
-            // late. Saying "that's off the list" then would be a fabricated cancellation of a task
-            // that is running. Decided 2026-08-03: finish what the user asked for and stop it,
-            // because they named this specific task.
-            steps =
-                listOf(
-                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
-                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
-                    Step.Do { ctx -> ctx.agent.raceLostFor(ctx.queuedId()) }, // it drained first
-                    effects(effect("cancelQueued", "task" to "book a table")),
-                ),
-            assert = { ctx ->
-              assertTrue(callLog(ctx).contains("cancelQueuedTask"))
-              assertTrue("it was running, so stopping it IS the cancel", callLog(ctx).contains("abort"))
-              // Never claims it was dropped before it began — it wasn't.
-              assertFalse(ctx.spokenHas("hadn't started"))
-              assertTrue(ctx.spokenHas("had just started"))
-              assertTrue(ctx.spokenHas("I've stopped it"))
-              assertEquals(Mode.IDLE, ctx.state.mode)
-            },
-        ),
-        Scenario(
-            name = "S48 a durable write that fails is admitted to, not swallowed",
-            guards = "a task accepted nowhere, with nothing said, is the failure this whole policy removes",
-            steps =
-                listOf(
-                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
-                    Step.Do { ctx -> ctx.agent.failQueueTask() },
-                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
-                ),
-            assert = { ctx ->
-              // Nowhere: not queued locally, not running, and not silently dropped.
-              assertEquals(0, ctx.state.queue.size)
-              assertEquals(listOf("check my unread emails"), ctx.state.inFlight)
-              assertEquals(emptyList<String>(), ctx.agent.queuedTexts())
-              assertTrue(ctx.spokenHas("couldn't get that queued up"))
-              // And it must NOT claim the task is waiting — that is the lie the failure becomes.
-              assertFalse(ctx.spokenHas("I'll start that as soon as"))
             },
         ),
         Scenario(
@@ -1046,10 +998,10 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("sendQueuedNow", "task" to "book a table")),
                 ),
             assert = { ctx ->
-              assertEquals(listOf("forwardTask", "queueTask", "sendQueuedNow"), callLog(ctx))
+              // Escalating is just forwarding it — nothing else could have started it.
+              assertEquals(listOf("forwardTask", "forwardTask"), callLog(ctx))
               // The running task is untouched: no abort, and never re-forwarded.
               assertFalse(callLog(ctx).contains("abort"))
-              assertEquals(1, ctx.agent.callsTo("forwardTask").size)
               // Both are in the SAME turn now, which is the cost of arriving early.
               assertEquals(
                   listOf("check my unread emails", "book a table for tonight"), ctx.state.inFlight)
@@ -1057,24 +1009,6 @@ val GOLDEN_SCENARIOS: List<Scenario> =
               assertEquals(Mode.WORKING, ctx.state.mode)
               assertTrue(ctx.spokenHas("Starting on that now"))
               assertFalse("it must not read as a swap", ctx.spokenHas("stopped"))
-            },
-        ),
-        Scenario(
-            name = "S50 rushing a task that already started claims nothing",
-            guards = "the same race as cancelling — \"I moved it up\" about a running task is the wrong claim",
-            steps =
-                listOf(
-                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
-                    effects(effect("forwardToAgent", "text" to "book a table for tonight")),
-                    Step.Do { ctx -> ctx.agent.raceLostFor(ctx.queuedId()) },
-                    effects(effect("sendQueuedNow", "task" to "book a table")),
-                ),
-            assert = { ctx ->
-              assertTrue(callLog(ctx).contains("sendQueuedNow"))
-              assertFalse(callLog(ctx).contains("abort"))
-              assertTrue(ctx.spokenHas("already underway"))
-              assertFalse(ctx.spokenHas("Starting on that now"))
-              assertEquals(0, ctx.state.queue.size)
             },
         ),
         Scenario(
@@ -1121,8 +1055,8 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("sendQueuedNow")), // which one?
                 ),
             assert = { ctx ->
-              assertEquals(listOf("forwardTask", "queueTask", "queueTask"), callLog(ctx))
-              assertFalse(callLog(ctx).contains("sendQueuedNow"))
+              assertEquals(listOf("forwardTask"), callLog(ctx))
+              assertEquals("nothing was started", 1, ctx.agent.callsTo("forwardTask").size)
               // Both still waiting, in order, and nothing spoken that claims otherwise.
               assertEquals(
                   listOf("book a table for tonight", "find me a florist"),
@@ -1141,7 +1075,8 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                     effects(effect("sendQueuedNow")), // unambiguous: only one is waiting
                 ),
             assert = { ctx ->
-              assertTrue(callLog(ctx).contains("sendQueuedNow"))
+              // Escalating is forwarding: two forwards, no naming needed, nothing stopped.
+              assertEquals(listOf("forwardTask", "forwardTask"), callLog(ctx))
               assertEquals(
                   listOf("check my unread emails", "book a table for tonight"), ctx.state.inFlight)
               assertTrue(ctx.spokenHas("Starting on that now"))

@@ -43,16 +43,14 @@ fun queuedBehindTask(running: String): String =
     "Got it — I'll start that as soon as I'm done with: ${shorten(running)}."
 
 /**
- * Spoken when the durable write failed, so the task was never accepted anywhere.
+ * Spoken when the task could not be started, so nothing is running.
  *
  * The alternative is silence: the user waits for work nothing ever took. Asking them to say it again
  * is the honest move — it is the difference between a retry and a task that quietly never happened.
+ *
+ * There is no companion line for a QUEUED task failing. Holding one is a list append that cannot
+ * fail, now that the server is not told about held work.
  */
-const val COULD_NOT_HOLD_TASK =
-    "Sorry — I couldn't get that queued up, so it isn't waiting and it hasn't started. Say it again " +
-        "and I’ll have another go."
-
-/** The same honesty rule as [COULD_NOT_HOLD_TASK], for the more common immediate path. */
 const val COULD_NOT_START_TASK =
     "Sorry — I couldn't get that started, so nothing is running. Say it again and I’ll have another go."
 
@@ -121,25 +119,12 @@ fun droppedQueuedLine(dropped: List<String>): String {
 }
 
 /**
- * Spoken when a cancellation arrived a moment too late and the task had to be stopped instead.
- *
- * Both halves out loud — it had started, and it is stopped now — because either alone is misleading.
- */
-fun startedThenStoppedLine(started: List<String>): String =
-    "That one had just started, so I've stopped it: ${readBackList(started)}. " +
-        "Let me know if you want me to check whether it got anywhere."
-
-/**
  * Spoken when a waiting task is pulled forward into the running turn.
  *
  * It says the other task is still going, because the user asked for a reorder, not a cancellation.
  */
 fun startingNowLine(tasks: List<String>): String =
     "Starting on that now, alongside what I'm already doing: ${readBackList(tasks)}."
-
-/** Spoken when the thing they wanted rushed had already begun by itself. */
-fun alreadyRunningLine(tasks: List<String>): String =
-    "That one's already underway, so nothing to move: ${readBackList(tasks)}."
 
 /**
  * Spoken when `interrupt` arrives with more than one of the user's requests outstanding.

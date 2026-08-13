@@ -219,16 +219,16 @@ class Concierge(
       }
 
   /**
-   * Start the next locally-held task, if the agent is free.
+   * Start the next held task, if the agent is free. At most one per call.
    *
-   * NEVER forwards an entry with a `pendingId`. Those live in a durable doc that the agent drains
-   * itself, so forwarding one here runs the task twice — the single most important invariant in this
-   * file. Drains at most one per call.
+   * This is the ONLY thing that ever starts queued work. The server holds no copy, so a task that
+   * never reaches here never runs at all — which makes every path that can leave `mode` at IDLE a
+   * path that must call this. Missing one strands a task the user was told was coming.
    */
   private suspend fun maybeDrainQueue() {
     if (state.mode != Mode.IDLE) return
-    val index = state.queue.indexOfFirst { it.pendingId == null }
-    if (index < 0) return
+    if (state.queue.isEmpty()) return
+    val index = 0
     val next = state.queue[index]
     state = state.removeQueued(index)
     // Its OWN attachments, never the bridge's current stash.

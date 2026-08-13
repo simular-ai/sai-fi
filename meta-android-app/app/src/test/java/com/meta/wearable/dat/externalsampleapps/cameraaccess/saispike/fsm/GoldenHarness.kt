@@ -170,8 +170,6 @@ fun agentEventJson(e: AgentEvent): JSONObject =
               .put("allowAlways", e.allowAlways)
       is AgentEvent.ApprovalResolved ->
           JSONObject().put("type", "approval-resolved").put("id", e.id).put("status", e.status)
-      is AgentEvent.QueuedTaskStarted ->
-          JSONObject().put("type", "queued-task-started").put("pendingId", e.pendingId)
       is AgentEvent.SessionState -> sessionStateJson(e)
     }
 
@@ -233,22 +231,7 @@ class GoldenCtx(
   /** What `getSaiStatus` would return on the device right now. */
   fun status(): String = activityLog.statusText()
 
-  /** The pending doc id of the first task the concierge held. */
-  fun queuedId(): String? =
-      agent.calls.firstOrNull { it.method == "queueTask" }?.let { agent.pendingIdFor(it) }
-
   fun resolveCall() = agent.calls.firstOrNull { it.method == "resolveApproval" }
-}
-
-/**
- * Stand in for the agent draining its own queue and starting the held task as a fresh turn.
- *
- * The agent owns the start now: it drains the pending doc at its own turn boundary, and the
- * concierge learns about it from `queued-task-started`. The FSM must NOT forward it as well.
- */
-val agentDrains: suspend (GoldenCtx) -> Unit = { ctx ->
-  val pendingId = ctx.queuedId() ?: error("no queued task to drain")
-  ctx.concierge.handleAgentEvent(ctx.agent.drain(pendingId))
 }
 
 sealed interface Step {
