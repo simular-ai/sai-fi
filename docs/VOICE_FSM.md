@@ -4,8 +4,8 @@ The state machine that decides what happens between the user speaking and the ag
 between the agent reporting and the user hearing about it. It lives in
 `meta-android-app/…/saispike/fsm/`.
 
-**Status:** ported and unit-tested; not yet wired into `CallService`. The app still runs the
-WebSocket path while the port is proven. See "Where this is going" at the end.
+**Status:** ported and unit-tested; not yet wired into `CallService`. See "Where this is going" at
+the end.
 
 This is a design doc, not an API reference — the KDoc on each class covers the *what*. What follows
 is the *why*, because most of these rules exist to prevent a specific failure that was seen on a real
@@ -18,8 +18,8 @@ device, and every one of them looks like something you could simplify until you 
 ## 1. Why the client owns this at all
 
 The server does no LLM inference for voice. The brain is the Gemini Live model running *on this
-device*; audio never touches the server, which only mints the ephemeral token. What the server used
-to contribute was pure orchestration — hold this task, ask before cancelling, don't resolve that
+device*, with your own key; audio never touches the server at all. What the server used to
+contribute was pure orchestration — hold this task, ask before cancelling, don't resolve that
 approval — and orchestration is exactly what a forked client needs to be able to change.
 
 So the split is:
@@ -31,8 +31,11 @@ So the split is:
 | System prompt, tools, voice | **this app** | Bundled — there is no server call that delivers them |
 | **The FSM, spoken lines, nudges** | **this app** | The conversation is yours to change |
 
-The server has exactly one voice-related endpoint left — `/v1/voice/*`, which is how work reaches
-your agent. Everything else about a call is here.
+The server has **no voice-related endpoint at all**. This app reaches the agent through
+`/v1/agents/*` — the same API a script or a CI job would use — and everything else about a call is
+here. That is deliberate: a fork should not need a server change to work, and the only thing a
+channel of its own ever bought was the concierge bypass, which `api` already has because it is a
+programmatic channel.
 
 ### Your own Gemini key
 
@@ -45,7 +48,7 @@ Simular server at all** — which is the point of the repo being public. You pay
 what you use.
 
 **Voice is not billed by us.** Only agent calls are: the work Sai does on your machine, through
-`/v1/voice/message`. Talking to the concierge costs whatever your Gemini key costs you, and nothing
+`/v1/agents/message`. Talking to the concierge costs whatever your Gemini key costs you, and nothing
 else.
 
 One caveat to hold onto: a `BuildConfig` field is a plaintext constant in the built APK, so **the key
@@ -60,7 +63,7 @@ Everything in `State.kt`, `Effects.kt`, `Speech.kt` and `AgentIngest.kt` is pure
 input go in, a new state comes out. No coroutines, no clock, no I/O. `Concierge.kt` is the only part
 that suspends, and the ports (`AgentBridge`, `VoiceChannel`) are the only way it reaches the world.
 
-That split is what makes 62 golden scenarios runnable as plain JVM tests. It is the same shape
+That split is what makes 59 golden scenarios runnable as plain JVM tests. It is the same shape
 `GlassesLink` uses, for the same reason.
 
 **Do not make the pure parts call the clock or the network.** The moment they do, the catalog stops
@@ -148,53 +151,55 @@ hears "on it" waits for a result nothing is producing. So the spoken line names 
 
 > "Got it — I'll start that as soon as I'm done with: …"
 
-## 7. Durable vs non-durable queue entries
+## 7. The queue is local, and that is a trade
 
-This is the single most load-bearing distinction in the queue, and getting it wrong runs a task
-twice.
+Held tasks live in this FSM and **nowhere else**. Nothing is written server-side when a task is
+held; the agent is told about it only when `maybeDrainQueue` forwards it.
 
-| | `pendingId` present | `pendingId` absent |
-| --- | --- | --- |
-| Created by | admission (`forwardToAgent` while busy) | the model's `enqueue` effect |
-| Lives in | a durable pending doc, server-side | this FSM only |
-| Who starts it | **the agent**, on its own schedule | only `maybeDrainQueue` / `sendQueuedNow` |
-| FSM entry is | a *display copy* | the whole truth |
+**What this costs.** A held task does not survive a dropped call, a killed app, or a crash. Work the
+user was *promised out loud* disappears with nothing said. This is the worst property of the current
+design, and it is not an oversight — the queue used to be a durable Firestore doc precisely so that
+could not happen.
 
-So `maybeDrainQueue` **never forwards an entry with a `pendingId`**. The agent will drain that doc
-itself; forwarding it here books the table twice.
+**What it buys.** Nothing else can start a task this FSM is holding. That single fact removes an
+entire class of failure, described below.
 
-A durable entry also survives a dropped call, which an in-memory queue does not — and a queued task
-the user was promised out loud is the worst thing to lose on a reconnect.
+The consequence to hold onto when changing anything here: **`maybeDrainQueue` is the only thing in
+the world that starts a held task.** So every path that can leave `mode` at `IDLE` has to reach it.
+It runs after each agent event, which covers every way a turn ends today; miss one and a task the
+user was told was coming simply never runs.
 
-## 8. The three races
+## 8. The races that used to be here
 
-Held work lives in two uncoordinated places: this FSM's queue, and the durable doc the agent drains
-at its own turn boundary. Between the user asking and the code acting, the agent may already have
-started the task being cancelled. `Races.kt` guards three cases.
+`Races.kt` is gone. It guarded three cases that arose because held work lived in two uncoordinated
+places — this FSM's queue, and a durable doc the agent drained at its own turn boundary. Between the
+user asking and the code acting, the agent could already have started the task being cancelled.
 
-**`dropDurably`** — the entry may already have been drained. A cancel that *throws* is counted as
-`started`, not `dropped`: the outcome is unknown, so claim nothing. An unreported failure here is how
-"that's off the list" gets said about a task that is still going to run.
+With one copy of the queue, two of the three cannot happen:
 
-**`abortTaskThatBeatTheCancel`** — the cancel lost. Aborting without asking is justified narrowly:
-the user *named* this task and asked for it to stop. Note it still stops everything else in the turn,
-because `abort()` has no scope. It says both halves out loud — it had started, and it is stopped now
-— since either alone misleads.
+- **`dropDurably`** — an entry may already have been drained, so a cancel had to report which tasks
+  got away and count a throw as `started`. Now removing the entry *is* the cancellation, and
+  "that's off the list" is unconditionally true.
+- **`abortTaskThatBeatTheCancel`** — the cancel lost, so the named task was already running and had
+  to be aborted (stopping everything else in the turn with it, since `abort()` has no scope). It
+  cannot lose a race that does not exist.
 
-**`denyApprovalKilledByAbort`** — the abort killed the turn an approval belonged to. `denied` is the
-honest status: the user stopped the task, they did not agree to it. Without this the card can only
-expire, and the user hears "that request timed out" about work they cancelled minutes ago.
+The third survives, in `ApprovalHandlers.kt`:
 
-### Ordering constraints that follow
+- **`denyApprovalKilledByAbort`** — the abort killed the turn an approval belonged to. `denied` is
+  the honest status: the user stopped the task, they did not agree to it. Without this the card can
+  only expire, and the user hears "that request timed out" about work they cancelled minutes ago.
+  This was never a race with the queue, which is why it is still needed.
 
-These look arbitrary in the code. They are not:
+Three golden scenarios went with them — S47, S48 and S50. Each pinned a sequence that can no longer
+be produced, and none was dropped to make the suite pass.
 
-1. **`takePendingAttachments` before `queueTask`** — the bridge's photo stash is drained by whoever
-   writes next, so a held task must take its own or drain with someone else's picture attached.
-2. **`dropDurably` before `abort()`** — the other way round, the abort ends the turn and the agent
-   drains the next queued doc seconds later. "Stop" would launch a task.
-3. **`denyApprovalKilledByAbort` before the state clear** — it reads `pendingApprovalId`.
-4. **`resolveApproval` before clearing the timer and state** — so a throw leaves the approval still
+### Ordering constraints that survive
+
+1. **`takePendingAttachments` at ENQUEUE, not at drain** — the bridge's photo stash is drained by
+   whoever writes next, so a held task must take its own or drain with someone else's picture.
+2. **`denyApprovalKilledByAbort` before the state clear** — it reads `pendingApprovalId`.
+3. **`resolveApproval` before clearing the timer and state** — so a throw leaves the approval still
    resolvable.
 
 ## 9. The approval guard is a security boundary
@@ -211,8 +216,15 @@ agent**, and nudges the model to re-present. The server re-checks this independe
 `/v1/agents/approve`, so a client bug degrades to a rejected approval rather than a forged one — but
 keep the client guard, because it is what gets the model to ask again.
 
-Encoding matters too: exactly one pick uses `selectedOption`, two or more use `selectedOptions`. A
-single-element list sent as the plural approves the card and silently drops the user's answer.
+Encoding matters too. The agent resolves a choice **positionally** — one non-empty group per
+question, in the card's order — and a spoken pick carries no question index. `groupSelections` puts a
+flat answer back into its slots: a value goes to the first question that offered it, and free text
+to the first question that accepts it.
+
+A question left with no pick yields an **empty group**, deliberately. The agent then refuses the
+whole resolution, which surfaces as a re-present nudge. Inventing a pick to make the shape valid
+would answer for the user, and silently omitting the group would shift every later answer one
+question to the left.
 
 ## 10. Concurrency: why a Mutex, not the house idiom
 
@@ -228,7 +240,7 @@ changed. Concretely: two forwards both observe an empty `inFlight` before either
 take the immediate path, and the user's restaurant is booked twice.
 
 **Testability.** `Dispatchers.Main` has no implementation in a plain JUnit run, and nothing in this
-suite installs one. An FSM that named it could not be unit-tested at all — and the 62 golden
+suite installs one. An FSM that named it could not be unit-tested at all — and the 59 golden
 scenarios are the only thing that proves this port matches the server's behaviour.
 
 The server does the same job with a promise-tail chain. One `Mutex` is the same guarantee.
@@ -251,16 +263,21 @@ green with less in it.
 
 ## Where this is going
 
-The FSM is ported and tested but not yet driving a call. The remaining work:
+The FSM is ported, tested, and reaching the agent over `/v1/agents/*`, but it is **not yet driving a
+call**. The remaining work is all in `CallService`:
 
-1. `ConciergeClient` moves to `POST /v1/voice/message` + SSE `GET /v1/voice/stream`.
-2. `ConciergeSocket` is deleted; `CallController` delegates to the FSM instead of reacting to server
-   directives; `AgentEventRouter` and `HeldNudgeQueue` fold in rather than running a second queue.
-3. Bring-your-own-key lands: a settings field, encrypted storage, and bundled default
-   prompt/tools/voice so a build with no server configured is still runnable.
-4. The server's WebSocket and its copy of the FSM are removed.
+1. `CallController` delegates to the FSM instead of reacting to server directives; `AgentEventRouter`
+   and `HeldNudgeQueue` fold in rather than running a second queue.
+2. `VoiceSession.start()` is called for the call, and the model's tool calls routed into
+   `applyEffects`.
 
-Until then this app still runs the WebSocket path, and the FSM here is inert.
+Two things worth deciding on rather than inheriting:
+
+- **A held task lost to a dropped call is currently silent.** Saying something on reconnect — even
+  just naming what was waiting — would cost little and is the obvious mitigation for §7.
+- **Nothing is heard between turns.** An approval resolved elsewhere while the agent is idle will not
+  reach the FSM. If that turns out to matter in practice, a poll of
+  `GET /v1/agents/context` at turn boundaries is the cheapest fix that needs no server change.
 
 ## See also
 

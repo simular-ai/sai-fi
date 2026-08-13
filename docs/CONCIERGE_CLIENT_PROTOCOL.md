@@ -1,26 +1,21 @@
 # Voice concierge — client protocol
 
-The wire contract this app implements against Sai's cloud-api: what a client needs to start a call,
-every endpoint it uses, and the obligations it cannot delegate to the server.
+**Audience:** anyone implementing a voice client against `cloud-api`. The reference implementation is
+[`simular-ai/sai-fi`](https://github.com/simular-ai/sai-fi).
 
-**This app owns the conversation** — the live voice model, the microphone and speaker, the
-orchestration FSM ([`VOICE_FSM.md`](VOICE_FSM.md)), the spoken lines, and its own Gemini credential.
-**The server owns the agent**: the machine doing real work, and the writes that reach it. This
-document is the seam, and nothing else here restates it — the modules in
-[`SAI_GLASSES_APP.md`](SAI_GLASSES_APP.md) are described in terms of the obligations below.
+**The client owns the conversation.** It runs the live voice model, the microphone and speaker, the
+orchestration FSM, the queue, the spoken lines, and its own Gemini credential. **The server owns the
+agent** — the machine doing real work, and the writes that reach it. This document is the seam, and
+it is deliberately made of endpoints that already existed.
 
-> **Provenance.** This is the client's copy of a contract whose server half lives in another
-> repository. Vendored so this repo is self-contained; the two are kept in step by hand, and the
-> fixtures under `app/src/test/resources/parity/` are what actually catch drift.
+> **Rewritten 2026-08-13.** This used to describe a WebSocket to a server-side FSM, and then briefly
+> a `/v1/voice/*` HTTP surface. Both are gone, and **nothing replaced them**: a voice client is an
+> ordinary API caller. There is no voice endpoint, no voice channel, and no server-side queue. The
+> FSM moved to the device (see sai-fi's `docs/VOICE_FSM.md`), the client brings its own Gemini key,
+> and voice is not billed. See `docs/plans/2026-08-12-reduced-voice-concierge.md`.
 
-> **Rewritten 2026-08-12.** This used to describe a WebSocket to a server-side FSM, bootstrapped by
-> `POST /v1/concierge/session` with a server-minted Gemini token. All of that is gone. The FSM moved
-> to the device (see sai-fi's `docs/VOICE_FSM.md`), the client brings its own API key, and voice is no
-> longer billed. What remains is a small HTTP surface. See
-> `docs/plans/2026-08-12-reduced-voice-concierge.md`.
-
-Machine-readable companions live in `app/src/test/resources/parity/`, generated from the server's
-source and committed here.
+Machine-readable companions, generated from the source and committed under
+`cloud-api/src/services/concierge/voice/contract/fixtures/`.
 
 ## 1. Getting a session
 
@@ -35,62 +30,82 @@ There is nothing to fetch. A client needs three things, all its own:
 The client opens its Live session **directly** with Google. Audio never touches cloud-api, and the
 voice half of a call works with no Simular server reachable at all.
 
-## 2. `/v1/voice/*` — reaching the agent
+## 2. `/v1/agents/*` — reaching the agent
 
-Bearer-authenticated with the Firebase ID token. The **channel is pinned by the route**: a caller
-cannot claim to be `voice` and so cannot buy the concierge bypass that goes with it.
+**There is no voice-specific endpoint.** A voice client authenticates with a Firebase ID token (or an
+API key) and uses the ordinary agent API, exactly as a script would.
+
+That works because `api` is a **programmatic** channel, which already skips both the text concierge
+and the legacy free-text command matchers. A spoken "restart agent" therefore reaches the machine as
+a task instead of being intercepted and answered by the server. That bypass was the only thing a
+channel of its own ever bought.
 
 | Endpoint | Body | Answers |
 | --- | --- | --- |
-| `POST /message` | `machineId`, `message`, `deliveryMode?`, `attachments?` | `{sessionId?, delivered, pendingId?, notice?}` |
-| `GET /stream?machineId=` | — | SSE of agent events, for the life of the call |
-| `POST /cancel-queued` | `machineId`, `pendingId` | `{outcome: 'cancelled'\|'already-started'}` |
-| `POST /send-now` | `machineId`, `pendingId` | `{outcome: 'sent'\|'already-started'}` |
-| `POST /abort` | `machineId` | `{aborted}` |
-| `POST /reset` | `machineId` | `{outcome: 'ok'\|'rate-limited'\|'failed'}` |
-| `POST /approve` | `machineId`, `approvalId`, `decision`, `values?` | `{resolved}` · **422** on a rejected pick |
+| `POST /v1/agents/message` | `machineId`, `message`, `attachments?` | **the turn's SSE stream** |
+| `POST /v1/agents/abort` | `machineId` | `{aborted}` |
+| `POST /v1/agents/new-session` | `machineId` | `{sessionId}` · **429** when rate-limited |
+| `POST /v1/agents/approve` | `approvalId`, `response`, `selections?` | `{ok}` · **400** on a rejected pick |
 
-**`deliveryMode`** decides how a BUSY agent receives the message: `steer` folds it into the running
-turn, `queue` holds it and runs it as a fresh one. Omit it for a new task on an idle agent.
+**The response IS the stream.** There is no ack and no second connection. This has two consequences a
+client must design around:
 
-**The write acks; it does not stream.** The client holds one long-lived `/stream` connection and must
-hear things no write of its own provoked — an approval raised mid-turn, a completion after a
-reconnect, a resolution the user made in the desktop app, a turn the agent began by draining its own
-queue. `delivered: false` means the router handled the message itself and nothing will stream; a
-client that waits for events anyway will wait forever.
+- **A send must not block on the turn.** If your orchestration holds a lock while sending — sai-fi's
+  FSM does — reading the stream on that same coroutine deadlocks the call on its own first task.
+  Suspend only until the response *headers* arrive (which is what tells you the agent accepted it),
+  then read the body elsewhere.
+- **A steer's stream is redundant.** Steering is the same `POST /message` into a running turn, and
+  its response replays that turn's events. Reading both delivers every event twice — the completion
+  twice, the approval twice. Discard it.
 
-**`queue` can come back with no `pendingId`.** That means the agent turned out idle and the task
-STARTED. Do not report it as waiting, and do not hold an id that will never exist.
+**You are connected only while the agent is working.** Nothing arrives between turns: an approval
+resolved in the desktop app while nothing is running is not heard. If that matters,
+`GET /v1/agents/context` at a turn boundary is the cheapest way to catch up.
 
-**The two race answers are load-bearing.** `cancel-queued` and `send-now` race the agent's own drain
-by construction, and `already-started` is the truth, not an error. Reporting a cancellation that did
-not happen is how "that's off the list" gets said about a task that is still booking a table.
+**A dropped stream is not a completion.** The agent may still be working. Report it to your
+orchestration as an error or an unknown outcome — anything that says "done" is a lie about work that
+may still be running.
 
-**Selections are sent FLAT.** A spoken pick carries no question index, so the server groups the
-values per question from the approval doc — the client cannot do this correctly. A rejected pick is a
-**422**, and the client must keep the request pending and ask the model to re-present. Treating it as
-success deadlocks the call: the client clears its state while the approval stays open.
+**Selections are POSITIONAL.** `selections` is one non-empty array per question, in the card's order,
+and the server refuses a resolution that does not answer every question. A spoken pick carries no
+question index, so the client must group them itself — the `data-approval-request` frame carries
+`questions` for exactly this. A rejected pick is a **400**, and the client must keep the request
+pending and ask the model to re-present. Treating it as success deadlocks the call: the client clears
+its state while the approval stays open.
 
-### Agent events (SSE)
+**`response` is `yes` / `no` / `always`** — not the `approved` / `denied` status the approval doc
+ends up carrying.
 
-`text` · `progress` · `status` · `complete` · `error` · `notice` · `approval-request` ·
-`approval-resolved` · `queued-task-started` · `session-state`
+### The stream's vocabulary, and how to read it
 
-An unrecognised frame must be **dropped, not thrown**: a newer server must not be able to end a call
-by sending something the client predates.
+The stream is the Vercel AI SDK v6 UI message protocol, which is **not** an orchestration vocabulary.
+The mappings that matter are the ones where the obvious reading is wrong:
 
-**`notice` is not optional.** It is news about DELIVERY rather than work — a hibernated machine
-waking, an agent that is offline. Dropping it is how a task sent to a sleeping machine bought a
-silent minute with no explanation.
+| Frame | Read it as | Why not the obvious thing |
+| --- | --- | --- |
+| `text-delta` | assistant answer, a fragment at a time | Buffering to `text-end` holds the answer until the turn is over |
+| `reasoning-delta` | mid-turn narration, **silent** | It is thinking, not an answer |
+| `data-progress` | tool progress, silent | — |
+| `tool-output-error` | a **step** that failed, task continues | Not `error`, which is terminal — reading it as one ends turns that are still running |
+| `data-status` | **delivery** news: waking a machine, agent offline | Not progress. It is the one thing that must be relayed before the task has produced anything |
+| `data-approval-request` | approval / input / selection | Carries `options` (flat) or `questions` (grouped) — you need both: one to pick from, one to resolve with |
+| `finish` | the turn ended | The only end-of-turn signal. No summary — the answer already arrived as text |
+| `error` | terminal failure | — |
+
+An unrecognised frame must be **dropped, not thrown**: there are more frame kinds on this stream than
+any client needs, and a newer server must not be able to end a call by sending one you predate.
 
 ## 3. Orchestration is the client's
 
-The FSM that admits, queues, interrupts and resolves is **this app's**, and it is the largest thing
-this protocol no longer specifies. [`VOICE_FSM.md`](VOICE_FSM.md) documents the one this app runs, including
-the rules that are not obvious: the admission rule, the durable/non-durable queue split, the three
-races against the agent's drain, and the ordering constraints that follow from them.
+The FSM that admits, queues, interrupts and resolves is **yours**, and it is the largest thing this
+protocol no longer specifies. sai-fi's `docs/VOICE_FSM.md` documents the one that exists, including
+the rules that are not obvious: the admission rule, why the queue is local and what that costs, and
+the ordering constraints that follow.
 
-A fork does not have to reproduce it. It does have to answer the same questions.
+**The queue is yours and the server has no copy.** Nothing you hold is durable, so a dropped call
+loses it — and in exchange nothing can start a task you are holding behind your back.
+
+You do not have to reproduce it. You do have to answer the same questions.
 
 ## 4. Device tools — the client's obligations
 
@@ -101,7 +116,7 @@ The client MUST answer every call, or the model stalls mid-turn waiting for a fu
 | --- | --- |
 | `getSaiStatus` | Answer from its own `ActivityLog` — see §5. Never forward |
 | `recallHistory` | Fetch `GET /v1/agents/context` and return the history. Never forward |
-| `switchMachine` | Switch machines locally, repoint the stream, then `{result:'ok'}` |
+| `switchMachine` | Switch machines locally — the next `POST /message` names the new one — then `{result:'ok'}` |
 | `endCall` | End the call after the model has said goodbye, then `{result:'ok'}` |
 | `captureImage` | Capture, hold the image locally, and report success **or the real failure reason** |
 
@@ -114,6 +129,10 @@ unless asked. Keep that shape.
 Some strings the user hears or reads are rendered **on the client**, from an agent event. The
 canonical wording lives in `voice/contract/nudges.ts` and `voice/contract/activity-log.ts`, and the
 fixtures pin it byte for byte so a port cannot drift silently.
+
+These read the vocabulary in `voice/agent-events.ts`, which is the union a client translates the
+stream INTO — not a wire format. Keeping it named on both sides is what lets the fixtures compare
+two independent renderings of the same input.
 
 - **Nudges** (`describeAgentEvent`) — model-facing text derived from an agent event.
 - **Activity lines** (`renderAgentActivity`) — for an on-screen log. Carries glyphs.
@@ -154,8 +173,8 @@ All Bearer-authenticated. Optional `x-sai-version: <tag>` routes to a specific s
 | `GET /v1/agents/context?machineId=&limit=` | Recent history — backs `recallHistory` |
 | `POST /v1/agents/upload` | Upload a captured image; returns the attachment |
 
-`401` bad token · `403` machine not owned. Treat both as permanent for the call. There is no longer a
-`402`: voice is not billed, and only agent work is.
+`401` bad token · `403` machine not owned. Treat both as permanent for the call. A `402` still means
+the user is out of agent credit — voice itself is not billed, but the work Sai does is.
 
 ## 8. Keeping a port honest
 
@@ -164,7 +183,7 @@ new ones:
 
 1. **Rendered strings** — load the fixture JSON and assert byte-identical output.
    (`ConciergeProtocolParityTest.kt` / `ActivityLogParityTest.kt` are the reference.)
-2. **Orchestration** — `FsmGoldenTest` runs 62 scenarios that pin what the FSM does with
+2. **Orchestration** — sai-fi's `FsmGoldenTest` runs 59 scenarios that pin what the FSM does with
    every input sequence that has ever mattered. If you write your own, that catalog is the spec worth
    copying; each scenario names the failure it prevents.
 

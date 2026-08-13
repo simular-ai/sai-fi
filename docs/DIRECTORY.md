@@ -83,7 +83,7 @@ below — the path still carries the app's earlier name).
 | File (`…/saispike/`) | What it does |
 | --- | --- |
 | `ConciergeClient.kt` | HTTP calls: list machines, recall history, upload. |
-| `VoiceChannelClient.kt` | The `/v1/voice/*` surface: `POST /message`, the SSE `GET /stream`, and the queue/abort/reset/approve operations. |
+| `VoiceChannelClient.kt` | The `/v1/agents/*` surface: `POST /message` (whose response IS the turn's stream), `abort` / `new-session` / `approve`, and the translation from the AI-SDK stream vocabulary into `AgentEvent`. |
 | `VoiceSession.kt` | One call's concierge: the FSM, its two ports, the SSE reader, reconnect, and the cost guard. Replaces the old WebSocket. |
 | `HttpAgentBridge.kt` | The FSM's `AgentBridge` over HTTP, plus the photo stash and the location line folded into a task's text. |
 | `VoiceConverters.kt` | Typed agent events back to the JSON that `ActivityLog` and `AgentEventRouter` read. |
@@ -127,9 +127,8 @@ no coroutines, no clock, no I/O — which is what makes the golden catalog runna
 | `EffectCtx.kt` | The whole surface a handler gets; `state` is a live alias, not a copy. |
 | `TaskHandlers.kt` | `forwardToAgent` / `relayToAgent` — the admission rule. |
 | `ApprovalHandlers.kt` | `approve` / `deny` / `chooseOption`, including the offered-value guard. |
-| `QueueHandlers.kt` | `enqueue` / `sendQueuedNow` / `cancelQueued`, durable and not. |
+| `QueueHandlers.kt` | `enqueue` / `sendQueuedNow` / `cancelQueued` — all list edits, because the queue never leaves the device. |
 | `InterruptHandler.kt` | `interrupt` (the one-shot scope question) and `resetSession`. |
-| `Races.kt` | The three races against the agent's own drain, and their ordering constraints. |
 | `CostGuard.kt` | The two bounds on what an open microphone can cost. |
 | `Speech.kt` | Every line the FSM produces — `say` (verbatim) and `instruct` (model-only). |
 | `VoiceProfile.kt` | Loads `assets/voice-profile.json`: the system prompt, the tool declarations, the model and the voice. Ships with the app, because no server delivers them any more. |
@@ -175,7 +174,7 @@ Fast JVM unit tests (20 classes, 239 tests, no device/emulator needed). Three ki
   `CallNotificationTextTest`, `PresenterSocketTest`).
 - **`*ParityTest.kt`** — replay a shared fixture to prove the Kotlin port matches the server
   (`ConciergeProtocolParityTest`, `ActivityLogParityTest`).
-- **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 62 scenarios ported from the
+- **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 59 scenarios ported from the
   server's catalog, each naming the failure it prevents.
 
 ---

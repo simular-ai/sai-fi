@@ -25,9 +25,9 @@ confirm it is up and serving the concierge routes before you touch the glasses:
 ```bash
 CONCIERGE_URL=$(grep '^concierge_url=' meta-android-app/local.properties | cut -d= -f2-)
 curl -s "$CONCIERGE_URL/health"                                              # → {"status":"ok",…}
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "$CONCIERGE_URL/v1/voice/message"
-#   401 → the voice routes exist (unauthenticated, as expected)
-#   404 → you are pointed at a build without them
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "$CONCIERGE_URL/v1/agents/message"
+#   401 → the agent API is there (unauthenticated, as expected)
+#   404 → you are pointed at something that is not cloud-api
 ```
 
 > **The voice half does not touch this server.** Audio goes straight from the phone to Google with
@@ -86,7 +86,7 @@ streams to a browser. DEBUG builds only, LAN only.
 >
 > | | What to watch |
 > | --- | --- |
-> | The event stream connects | Nothing at all arrives from the agent if `GET /v1/voice/stream` fails — checks 2, 3 and 6 all go quiet together |
+> | The turn stream connects | `POST /v1/agents/message` answers with the turn's events. If that response is not read, nothing arrives from the agent at all — checks 2, 3 and 6 all go quiet together |
 > | Live opens with `?key=` | The URL form changed. The wrong one closes with `1007 api key not valid` |
 > | An idle call ends itself | The cost guard moved from the server to the phone. Leave a call silent for five minutes; it should hang up and say why |
 > | Waking a machine | The "it's waking / it's ready" lines now travel as `notice` over the stream |
@@ -159,10 +159,11 @@ Press the **temple button** mid-call. Have a task complete while muted. Unmute.
 
 - **Expect:** Sai says it will happen **after** the current one — and then it actually runs when the
   first finishes. Not steered into the running turn.
-- **Exercises:** the highest-risk path here, and the newest. `deliveryMode: 'queue'` + `onPending` in
-  `inbound-router.ts`, `queueTask` in the bridge, the `queued-task-started` correlation, and
-  `effect-handlers/queue.ts`. If Sai says "I'll do that next" and then it never
-  runs, or it gets folded into the first task, that is the bug this check exists for.
+- **Exercises:** the highest-risk path here, and the newest. The admission rule in `TaskHandlers.kt`
+  and `maybeDrainQueue` in `Concierge.kt`. Nothing server-side is involved: the second task exists
+  only in this app's memory until the first turn ends, so if Sai says "I'll do that next" and then it
+  never runs, the drain never fired. **A dropped call here loses the held task with nothing said** —
+  that is known, and it is the cost of the queue being local.
 
 Four more cases, run in the same call while 6a's queue is still standing. They fail differently, and
 each is a way of *lying about the queue* rather than mishandling it — which is why they are by-ear

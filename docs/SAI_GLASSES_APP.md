@@ -51,30 +51,38 @@ Wearables Developer Center and a fresh install, and only an on-device call can c
   into cloud-api** — `POST /v1/concierge/session` + `WS /v1/concierge/ws`, real per-user auth,
   in-process agent bridge.
 - **Direction change 4 (implemented, 2026-08-12):** and then most of it came back here. The
-  orchestration FSM, the spoken lines, the prompt and the cost guard now run **on this device**, the
-  user brings their own Gemini key, and cloud-api keeps one voice surface — `/v1/voice/*` — for
-  reaching the agent. The session endpoint and the WebSocket are gone. The point is that this app can
-  hold a conversation with no server of ours involved; see [`VOICE_FSM.md`](VOICE_FSM.md).
+  orchestration FSM, the spoken lines, the prompt and the cost guard now run **on this device**, and
+  the user brings their own Gemini key. The session endpoint and the WebSocket are gone.
+- **Direction change 5 (implemented, 2026-08-13):** the last of it. There is no voice surface on the
+  server either — this app reaches the agent through `/v1/agents/*`, the ordinary Sai API, and the
+  held-task queue lives only in the FSM. cloud-api gained nothing for voice at all, which is what
+  lets a fork of this repo run against the API as it already exists. The cost is that a held task no
+  longer survives a dropped call; see [`VOICE_FSM.md`](VOICE_FSM.md).
 
 ## 2. Architecture
 
 ```
-  Meta Ray-Ban glasses        Android app (thin client)                cloud-api                       Sai agent
- ┌──────────────────┐        ┌───────────────────────────┐        ┌────────────────────────┐        ┌──────────────┐
- │ mic (HFP/SCO) ───┼──BT───▶│ AudioIo ─PCM16 16k─┐      │        │ POST /v1/concierge/    │        │ computer-use │
- │ speaker ◀────────┼──BT────│ ◀─PCM 24k─ GeminiLiveClient ──────▶│      session (mint)    │        │ agent on the │
- │ temple button ···┼······▶ │ VoiceSession ◀── agent events ─────│ GET  /v1/voice/stream  │        │ user's VM    │
- └──────────────────┘        │ CallService (fg) · CallController │ │ POST /v1/voice/message ┼────────▶ /v1/agents/* │
-                             │ **the concierge FSM lives here**  │ └────────────────────────┘        └──────────────┘
-                             │ VoiceConciergeActivity (UI)       │ └────────────────────────┘        └──────────────┘
-                             └───────────────────────────┘
-   audio link: glasses ⇄ Gemini Live (client-side, direct)      agent link: concierge ⇄ Sai (server-side, in-process)
+  Meta Ray-Ban glasses        Android app (thin client)                cloud-api                  Sai agent
+ ┌──────────────────┐        ┌───────────────────────────────────┐  ┌──────────────────────┐  ┌──────────────┐
+ │ mic (HFP/SCO) ───┼──BT───▶│ AudioIo ─PCM16 16k─┐              │  │                      │  │ computer-use │
+ │ speaker ◀────────┼──BT────│ ◀─PCM 24k─ GeminiLiveClient ──────┼─▶│  (not involved)      │  │ agent on the │
+ │ temple button ···┼······▶ │ VoiceSession                      │  │ POST /v1/agents/     │  │ user's VM    │
+ └──────────────────┘        │ CallService (fg) · CallController ├─▶│      message   ──────┼─▶│              │
+                             │ **the concierge FSM lives here**  │◀─┤   (its response IS   │  │              │
+                             │ VoiceConciergeActivity (UI)       │  │    the turn's events)│  │              │
+                             └───────────────────────────────────┘  └──────────────────────┘  └──────────────┘
+   audio link: glasses ⇄ Gemini Live (client-side, direct)      agent link: app ⇄ the ordinary Sai API
 ```
 
 Two independent links per call: the **audio link** (client ⇄ Gemini Live directly, with the user's
 own key — cloud-api is not involved at all) and the **agent link** (client ⇄ cloud-api over HTTP —
 the execution/trust boundary). The FSM sits between them, on this device: the model's tool calls go
-straight into it, and agent events arrive on the stream.
+straight into it, and agent events arrive on the turn's own stream.
+
+Note what the agent link is NOT: a persistent connection. A turn's events arrive on the response to
+the message that started it, so the app is connected to cloud-api **only while the agent is
+working**. Nothing that happens between turns is heard — an approval resolved in the desktop app
+while nothing is running, for instance.
 
 ### Android modules
 
@@ -88,13 +96,13 @@ straight into it, and agent events arrive on the stream.
 | `WindowCapture`                      | **DEBUG only.** Mirrors **this app's own window** to the presenter dashboard as ~3 fps JPEGs (tag 4 on `PresenterSocket`), so the room sees the app UI itself — machine picker, mute button, a crash — not just the call's contents. `PixelCopy` on the Activity's `Window`, encoded on its own `HandlerThread`; never touches the mic thread or the Live reader thread, and frames are dropped rather than queued. **No MediaProjection**, so no consent dialog, no cast indicator, no `mediaProjection` FGS type, and nothing outside this app's window is captured. Runs only while the Activity is resumed, and publishes through `CallController.screenSink`, which `CallService` opens alongside the presenter socket.                                                           |
 | `GeminiLiveClient`                   | Raw-WebSocket Gemini Live client: `setup` (model/prompt/tools/voice from the bootstrap) + realtime PCM; audio, transcripts, barge-in; routes function calls — effects → concierge, client-local tools handled on-device; nudge gating.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `AudioIo`                            | 16 kHz capture / 24 kHz playback. **Both routes** run on `VOICE_COMMUNICATION`/`MODE_IN_COMMUNICATION` for the whole call (platform AEC cancels the speaker from the mic; full-duplex voice barge-in). **Glasses route:** one persistent HFP/SCO session — the glasses mic streams up while the model's TTS plays back over the _same_ SCO link, mic live throughout, so voice barge-in works on the glasses exactly like on the phone. Playback is mono, SCO-fidelity (we deliberately do **not** switch to A2DP for hi-fi, which would drop the mic mid-utterance and kill barge-in — always-on full-duplex is the chosen tradeoff). Route-loss falls back to phone without dropping the call; SCO device add/remove notifies so the service can auto-reselect glasses on reconnect. |
-| `VoiceSession`                       | One call's concierge: owns the FSM, its two ports, and the SSE reader on `GET /v1/voice/stream`. Mints a **fresh Firebase ID token per attempt** (a long call outlives the ~1h one it started with). Effects go straight into the local FSM — there is no round trip. Exponential-backoff reconnect on transient drops; a permanent rejection (401/403/503) ends the call instead of retrying. **Owns the cost guard**, which used to be the server's: with no socket there is no server-side notion of this call, and an open microphone costs money whether or not anyone is still wearing the glasses. |
-| `HttpAgentBridge`                    | The FSM's `AgentBridge` over `/v1/voice/*` — forward, queue, steer, cancel, send-now, abort, reset, approve. Also holds the photo stash (taken at enqueue so a later capture cannot ride along) and folds a location fix into the task's text, because a user message has no metadata channel.                                                                                                                                                                                                                                                                                                                                     |
+| `VoiceSession`                       | One call's concierge: owns the FSM, its two ports, and the reader for each turn's stream. Mints a **fresh Firebase ID token per attempt** (a long call outlives the ~1h one it started with). Effects go straight into the local FSM — there is no round trip. A turn's stream is read on its own coroutine, never awaited by the send that opened it: `forwardTask` runs inside the FSM's mutex and the FSM needs that mutex for every event about to arrive. A dropped stream is reported to the FSM as an **error, never a completion** — the agent may still be working, and the one thing that must not be said is "done". **Owns the cost guard**, which used to be the server's: there is no server-side notion of this call at all, and an open microphone costs money whether or not anyone is still wearing the glasses. |
+| `HttpAgentBridge`                    | The FSM's `AgentBridge` over `/v1/agents/*` — forward, steer, abort, reset, approve. There is no endpoint for HOLDING a task: the queue is local, so the agent is told about a task only when it starts. Also holds the photo stash (taken when a task is held, so a later capture cannot ride along) and folds a location fix into the task's text, because a user message has no metadata channel.                                                                                                                                                                                                                                                                                                                                     |
 | `ConciergeClient`                    | HTTP: `POST /session`, `GET /v1/agents/machines`, `GET /v1/agents/context` (recallHistory), `POST /v1/agents/upload`. Dependency-free; non-2xx throws typed exceptions so permanent failures are distinguishable.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `ActivityLog` / `ConciergeProtocol`  | Kotlin ports of the server's `core/activity-log.ts` and `core/nudges.ts` (`describeAgentEvent` with prompt-injection fencing — port verbatim; drift is caught by the cross-port parity fixtures, §8.1). Feed `getSaiStatus` + the UI activity view.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `GlassesGestureSession`              | DAT `DeviceSession` (no display/camera capability) reacting to the only temple gestures DAT surfaces: tap = mute/unmute Sai, tap-and-hold/doff/fold = end (all just `DeviceSessionState`; no gesture is remappable — see §6 "Glasses gestures").                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `SaiFiApp` / `MainActivity`     | App init (`Wearables.initialize` once); `MainActivity` is now just the DAT-registration deep-link callback host (`saiwearables`) — the CameraAccess sample UI was pruned in productization.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `fsm/` (13 files)                    | **The conversation state machine**, ported from the server: modes and transitions, the bounded effect grammar and its parse boundary, the admission rule that holds a mid-turn task instead of folding it in, the durable/non-durable queue split, the three races against the agent's own drain, the cost guard, and every line the FSM speaks. Everything but `Concierge.kt` is pure, which is what makes the 62-scenario golden catalog runnable as JVM tests; `Concierge.kt` serialises all four input kinds through one `Mutex`, because two forwards interleaving at a suspension point books the restaurant twice. Design: [`VOICE_FSM.md`](VOICE_FSM.md). **Not yet wired into `CallService`** — the WS path still drives calls while the port is proven.                        |
+| `fsm/` (13 files)                    | **The conversation state machine**, ported from the server: modes and transitions, the bounded effect grammar and its parse boundary, the admission rule that holds a mid-turn task instead of folding it in, the local held-task queue, the cost guard, and every line the FSM speaks. Everything but `Concierge.kt` is pure, which is what makes the 59-scenario golden catalog runnable as JVM tests; `Concierge.kt` serialises all four input kinds through one `Mutex`, because two forwards interleaving at a suspension point books the restaurant twice. Design: [`VOICE_FSM.md`](VOICE_FSM.md). **Not yet wired into `CallService`** — the WS path still drives calls while the port is proven.                        |
 
 ## 3. The client contract (frozen; the Kotlin app ports the browser reference client)
 
@@ -112,7 +120,7 @@ straight into it, and agent events arrive on the stream.
    Don't duplicate them here either. Note what the authority is now: there is no wire-message
    fixture, because there are no server→client frames — the SSE stream carries agent events and
    nothing else. What is still pinned is the RENDERED text (`ConciergeProtocolParityTest`,
-   `ActivityLogParityTest`) and the orchestration (`FsmGoldenTest`, 62 scenarios).
+   `ActivityLogParityTest`) and the orchestration (`FsmGoldenTest`, 59 scenarios).
 4. **Nudge discipline (port exactly):** never inject a nudge mid-utterance (self-interruption);
    defer real nudges until `turnComplete`; on `serverContent.interrupted` flush queued playback
    (barge-in). There are no dead-air fills to speak or drop: the server-side watchdog that produced
@@ -185,7 +193,8 @@ naming, pruned the CameraAccess sample UI, `MainActivity` slimmed to a callback 
   stays signed in until they sign out or the refresh token is revoked (password reset, account
   disable). A fresh token is fetched per session mint/reconnect.
 - The server authorizes `machineId` ownership on the upgrade (403 otherwise).
-- The app never holds the Gemini API key — only the single-use ephemeral token.
+- The Gemini key is the user's own, from `local.properties`, and never reaches a Simular endpoint.
+  It is a plaintext constant in the built APK, so it travels with any build you share.
 - Voice-resolution limits (link-only credentials → finish in the app) are **server-enforced
   persona rules**; don't weaken them client-side.
 - Ideal end-state: a **device-scoped credential** provisioned at glasses pairing, revocable

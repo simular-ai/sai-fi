@@ -19,8 +19,9 @@ is someone else's computer doing real work.
   the effect grammar, the admission rule, the races, and why each rule exists. Read it before changing
   anything under `fsm/`.
 - [`docs/CONCIERGE_CLIENT_PROTOCOL.md`](docs/CONCIERGE_CLIENT_PROTOCOL.md) — the wire contract between
-  this app and the server: the `/v1/voice/*` endpoints, the SSE agent events, and the five tools this
-  client is obliged to answer itself.
+  this app and the server: the `/v1/agents/*` endpoints (the ordinary Sai API — there is no
+  voice-specific one), how their stream translates into agent events, and the five tools this client
+  is obliged to answer itself.
 - [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md) — **verify a build on real hardware.** Eight
   checks, ~25 minutes, each naming what it actually exercises.
 
