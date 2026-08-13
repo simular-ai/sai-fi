@@ -74,8 +74,43 @@ class VoiceConciergeActivity : ComponentActivity() {
   var machinesInfo by mutableStateOf("") // short non-error status ("Loading…", "No machines found")
   var machinesFetchOk by mutableStateOf(false) // last load succeeded (dropdown enabled)
 
-  // Voice-UX settings (in-memory; threaded into StartParams at call start — no persistence yet).
-  var askFirstThresholdSec by mutableStateOf("15")
+  /**
+   * Voice-UX settings, owned by the Settings tab and threaded into StartParams at call start.
+   *
+   * A `String` rather than an `Int` because it is what the text field holds, and a half-deleted field
+   * has to be allowed to not be a number. [Prefs.askFirstSec] stores the parsed value;
+   * [onAskFirstSecChanged] is the write path that keeps the two in step.
+   */
+  var askFirstThresholdSec by mutableStateOf(Prefs.DEFAULT_ASK_FIRST_SEC.toString())
+    private set
+
+  /**
+   * Developer mode: reveals the Logs tab and the in-call composer. Persisted, off by default.
+   *
+   * Seeded in [onCreate] and written through [onDevModeChanged]. Not a `BuildConfig.DEBUG` read — see
+   * [Prefs.devMode] for why the build type turned out to be the wrong question.
+   */
+  var devMode by mutableStateOf(false)
+    private set
+
+  /**
+   * Settings' write path for [askFirstThresholdSec]: keeps the field and [Prefs] in step.
+   *
+   * Named `on…Changed` rather than `set…` because a `setDevMode`/`setAskFirstThresholdSec` would
+   * collide on the JVM with the property's own generated setter.
+   */
+  fun onAskFirstSecChanged(typed: String) {
+    askFirstThresholdSec = typed.filter(Char::isDigit).take(4)
+    // Only persist a value that parses. Blanking the field to retype it must not write a 0 that
+    // becomes "ask immediately" if the app dies before the user finishes.
+    askFirstThresholdSec.toIntOrNull()?.let { Prefs.setAskFirstSec(this, it) }
+  }
+
+  /** Settings' write path for [devMode]. */
+  fun onDevModeChanged(value: Boolean) {
+    devMode = value
+    Prefs.setDevMode(this, value)
+  }
 
   // DAT glasses registration (one-time) — enables the temple button to start/stop the call.
   var glassesReg by mutableStateOf<RegistrationState?>(null)
@@ -253,6 +288,12 @@ class VoiceConciergeActivity : ComponentActivity() {
     // Seed the grant from what we last confirmed, so a grant already obtained stays shown while DAT's
     // laggy checkPermissionStatus catches up (see Prefs.glassesCameraGranted). refresh only upgrades.
     glassesCameraGranted = Prefs.glassesCameraGranted(this)
+    devMode = Prefs.devMode(this)
+    askFirstThresholdSec = Prefs.askFirstSec(this).toString()
+    // Before setContent, so the first composition already knows whether to draw the sign-in gate or
+    // the shell. Firebase restores its persisted session during FirebaseApp.initializeApp (SaiFiApp),
+    // and SaiAuth.isSignedIn() is a synchronous currentUser read, so a returning user never sees the
+    // gate flash past.
     refreshAuthState()
     refreshRouteStatus()
     refreshGlassesCameraStatus()
@@ -397,6 +438,13 @@ class VoiceConciergeActivity : ComponentActivity() {
 
   override fun onResume() {
     super.onResume()
+    // The sign-in state is now a gate, not a card, so a stale `true` is no longer a cosmetic problem:
+    // it strands the user on Home while every request 401s. There is no AuthStateListener anywhere, so
+    // a refresh token revoked out of band (password reset, account disabled, sign-out elsewhere) is
+    // invisible until something asks. This is the cheap half of the answer — isSignedIn() is a
+    // synchronous currentUser read, no I/O — and it catches the common case, where whatever revoked
+    // the session happened while this app was backgrounded.
+    refreshAuthState()
     refreshIdleRoute()
     getSystemService(AudioManager::class.java)
         ?.registerAudioDeviceCallback(audioDevices, Handler(Looper.getMainLooper()))
@@ -711,7 +759,13 @@ class VoiceConciergeActivity : ComponentActivity() {
       // Fresh ID token per call start; the service re-mints its own on a Live-session reconnect.
       val token = SaiAuth.idToken()
       if (token == null) {
-        showAuthError("Sign in first")
+        // NOT "sign in first", which is what this used to say: `currentUser` is non-null or we would
+        // not be past the gate, so the session exists and the *refresh* is what failed — offline, or
+        // a revoked refresh token. Telling someone who is demonstrably signed in to sign in sends
+        // them looking for a button that isn't there.
+        showAuthError(
+            "Couldn't refresh your sign-in token, so the call can't start. Check the connection; " +
+                "if it keeps failing, sign out in Settings and sign in again.")
         return@launch
       }
       CallController.start(

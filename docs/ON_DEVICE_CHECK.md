@@ -59,14 +59,20 @@ adb devices          # your phone should be listed
 ### The glasses
 
 1. Meta AI app → **Developer Mode ON**, glasses paired and connected.
-2. Launch **sai-fi**, sign in with Google.
-3. Register with Meta AI when prompted. Remember: **only one third-party DAT app can be registered at
-   a time** — this unregisters whatever else you had, and you will want to put that back afterwards.
-4. Pick your machine. Start the call.
+2. Launch **sai-fi**. Signed out, the only thing on screen is *Sign in with Google* — that is the
+   gate, not a stuck screen. Sign in.
+3. Register with Meta AI when prompted (Home → **Register glasses**). Remember: **only one third-party
+   DAT app can be registered at a time** — this unregisters whatever else you had, and you will want to
+   put that back afterwards.
+4. **Settings → Developer mode ON.** This is sai-fi's own switch, not Meta's, and it is off by default
+   in every build including debug. Without it there is no Logs tab, so the in-app transcript and the
+   text composer several checks below rely on are not there. It persists, so this is a once-per-install
+   step.
+5. Home: pick your machine, then Start the call.
 
 ### Watch it happen
 
-Two windows, both worth having:
+Three windows, all worth having — the Logs tab from step 4, plus:
 
 ```bash
 adb logcat -c && adb logcat | grep -E 'SaiFi:'      # Live, Audio, Concierge, Presenter, WindowCapture

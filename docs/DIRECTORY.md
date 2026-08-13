@@ -13,7 +13,7 @@ machine itself, and talks to Sai's cloud-api only to reach the agent.
 
 1. [`SAI_GLASSES_APP.md`](SAI_GLASSES_APP.md) — the architecture, the two links, the decisions.
 2. `…/saispike/CallService.kt` — the call graph; everything a live call does hangs off here.
-3. `…/saispike/VoiceConciergeActivity.kt` + `…/ui/ConciergeScreen.kt` — the only screen.
+3. `…/saispike/VoiceConciergeActivity.kt` + `…/ui/` — the one Activity and the four screens it hosts.
 4. The pure policy classes (`GreetingGate`, `ReconnectPolicy`, `HangupPolicy`, …) and their
    tests — small, side-effect-free, and the fastest way to understand a rule in isolation.
 
@@ -64,8 +64,14 @@ below — the path still carries the app's earlier name).
 | --- | --- |
 | `SaiFiApp.kt` | `Application`; initialises the Meta DAT SDK once. |
 | `MainActivity.kt` | Hosts the DAT registration deep-link callback; no UI of its own. |
-| `VoiceConciergeActivity.kt` | The one real screen's controller: sign-in, machine picker, glasses connect, voice settings, Start/Stop. Renders `CallController.state`; holds no call state. |
-| `ui/ConciergeScreen.kt` | The Compose UI for that screen. |
+| `VoiceConciergeActivity.kt` | The UI's controller **and** its state: sign-in, the machine list, glasses registration, the two persisted settings, Start/Stop. Renders `CallController.state`; holds no call state. |
+| `ui/ConciergeScreen.kt` | The shell, and nothing else: the sign-in gate, then a `Scaffold` with the bottom `NavigationBar`. ~110 lines — it used to be the whole UI at 952. |
+| `ui/SignInScreen.kt` | The gate. Signed out, this is the entire app: logo, title, one Google button. |
+| `ui/HomeScreen.kt` | Status chip, the glasses card, and the call card (machine picker → Start, or the four in-call controls). Was the "Controls" tab. |
+| `ui/SettingsScreen.kt` | Account + sign-out, the ask-first threshold, the developer-mode switch, and which build this is. |
+| `ui/LogsScreen.kt` | The interleaved transcript + log stream and the text composer. Only reachable with developer mode on. |
+| `ui/SaiTab.kt` | The three bottom-bar destinations, plus the pure rule for which exist (`tabsFor` / `coerceTab`). |
+| `ui/SaiComponents.kt` | The pieces every screen shares: `Section`, `GroupHeader`, `Hint`, `CallStatusChip`, `CaptureThumbnail`, the error dialog, the location rationale. |
 | `ui/theme/Theme.kt` | Colours + typography for the app (one file — was three). |
 
 ### The call runtime
@@ -139,7 +145,7 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 | File (`…/saispike/`) | What it does |
 | --- | --- |
 | `SaiAuth.kt` | Google sign-in and Firebase ID tokens. |
-| `Prefs.kt` | Small persisted prefs (e.g. last-picked machine). |
+| `Prefs.kt` | Small persisted prefs: the last-picked machine, the two Settings values (developer mode, ask-first seconds), and the one-shot permission-prompt flags. |
 | `PhoneLocation.kt` | Reads a fresh location fix when the model asks for one. |
 | `CallObserver.kt` | The seam a spectator watches a call through (`Noop…` is the release default). |
 
@@ -163,16 +169,17 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 | --- | --- |
 | `values/colors.xml`, `values/themes.xml`, `values-night/colors.xml` | Android-XML theme values (comments point back to `ui/theme/Theme.kt`). |
 | `font/` | The two bundled variable fonts. |
-| `drawable/`, `mipmap-*/` | Launcher icon. |
+| `drawable/` | Launcher icon foreground (reused as the sign-in screen's logo) and `ic_google_g.xml` — Google's mark for the sign-in button, whose four colours are theirs and must not be retinted. |
+| `mipmap-*/` | Launcher icon. |
 
 ### Tests — `app/src/test/java/…/saispike/`
 
-Fast JVM unit tests (20 classes, 239 tests, no device/emulator needed). Three kinds:
+Fast JVM unit tests (22 classes, 239 tests, no device/emulator needed). Three kinds:
 
 - **`*Test.kt`** — behaviour tests for one class each (`GlassesLinkTest`, `HangupPolicyTest`,
   `ReconnectPolicyTest`, `GreetingGateTest`, `HeldNudgeQueueTest`, `MachineSwitcherTest`,
   `AgentEventRouterTest`, `ActivityLogTest`, `ConciergeProtocolTest`,
-  `CallNotificationTextTest`, `PresenterSocketTest`).
+  `CallNotificationTextTest`, `PresenterSocketTest`, `ui/SaiTabTest`).
 - **`*ParityTest.kt`** — replay a shared fixture to prove the Kotlin port matches the server
   (`ConciergeProtocolParityTest`, `ActivityLogParityTest`).
 - **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 59 scenarios ported from the

@@ -88,6 +88,18 @@ private object D {
 
 /** `--success` / `--logo-bg` — the same green as the launcher icon. Mode-independent. */
 private val Green = Color(0xFF16D342)
+/**
+ * [Green] relit for the light background — the accent tone, not a second success colour.
+ *
+ * The second token that has to DIVERGE from base.css, for the mirror image of [BlueDark]'s reason.
+ * [Green] is mode-independent because it is the logo's green, and on #F9FAF5 it measures 1.92:1 —
+ * below even the 3:1 floor for non-text, so a header or a hairline in it reads as "something faintly
+ * green happened" rather than as Sai's colour. Same hue pulled down to L=0.15, which lands at 5.03:1
+ * on #F9FAF5 — AA for the header label, and comparable to the 9.72:1 [Green] gets on #0C0C0C. Dark
+ * mode keeps [Green] itself; only light mode needs the darker tone, which is why this is a
+ * light-only value and not a replacement.
+ */
+private val GreenStrong = Color(0xFF0D7D28)
 /** `--warning`. Mode-independent. */
 private val Amber = Color(0xFFFFAB3C)
 /**
@@ -211,6 +223,16 @@ data class SaiExtendedColors(
     val danger: Color,
     /** Label on [danger]. */
     val onDanger: Color,
+    /**
+     * Group headers, the rules under them, and the selected bottom-nav destination. **Never a
+     * button** — see rule 1 above.
+     *
+     * Separate from [success] on purpose, even though dark mode gives them the same value: [success]
+     * means "this is going well" (the live dot, a photo that landed) and this means "this is Sai's".
+     * One token serving both is how "the call is live" and "this is a heading" end up looking like
+     * the same statement.
+     */
+    val accent: Color,
 )
 
 val SaiLightExtended =
@@ -221,6 +243,7 @@ val SaiLightExtended =
         border = L.border,
         danger = Danger,
         onDanger = L.background,
+        accent = GreenStrong,
     )
 
 val SaiDarkExtended =
@@ -231,6 +254,7 @@ val SaiDarkExtended =
         border = D.border,
         danger = DangerDark,
         onDanger = D.foreground,
+        accent = Green,
     )
 
 // ── Type ─────────────────────────────────────────────────────────────────────────────────────────
