@@ -32,3 +32,22 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# ── added with the client (2026-08-07) ───────────────────────────────────────
+
+# sample.keystore is the DEBUG signing config and stays TRACKED, against the
+# `*.keystore` rule above. It came from Meta's public CameraAccess sample, and a
+# STABLE debug signature is what the Meta AI DAT registration binds to — drop it
+# and every clone signs with a different key, so registration silently stops
+# working with nothing to point at.
+!meta-android-app/app/sample.keystore
+
+# local.properties is ignored above; this is the template that documents it.
+!meta-android-app/local.properties.example
+
+# presenter (Node) — the demo dashboard is polyglot with the Android app
+node_modules/
+dist/
+
+# macOS
+.DS_Store

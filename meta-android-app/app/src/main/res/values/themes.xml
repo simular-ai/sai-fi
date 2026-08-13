@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The window theme — what the system draws BEFORE Compose has its first frame up. Compose paints over
+  it a moment later, so the only thing this controls in practice is the cold-start flash; get it wrong
+  and the app opens on a colour that belongs to neither mode.
+
+  It used to be `android:Theme.Material.Light.NoActionBar` with a BLACK `colorBackground` — a light
+  theme with a dark background, inherited from the Meta CameraAccess sample this app was forked from.
+  There is no `android:Theme.Material.DayNight` in the platform namespace (DayNight parents come from
+  AppCompat / Material Components, neither of which this app depends on), so day/night is done the
+  resource way instead: this file declares the light parent and values-night/ declares the dark one
+  under the same style name. The flash then matches whichever mode SaiTheme is about to render.
+
+  Values here are duplicated from ui/theme/Theme.kt on purpose: XML can't read Compose Colors. Keep
+  them in step — both trace back to the `background` token in the desktop app's base.css.
+-->
+<resources>
+
+    <style name="Theme.CameraAccess" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- background token, light -->
+        <item name="android:colorBackground">@color/sai_window_background</item>
+        <item name="android:windowBackground">@color/sai_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Dark icons on the light background; values-night flips both. -->
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

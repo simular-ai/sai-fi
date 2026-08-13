@@ -1,0 +1,22 @@
+[
+  {
+    "name": "APPROVAL_TIMEOUT_NUDGE",
+    "input": null,
+    "expected": "[system] The pending request is about to time out and the user hasn't answered. Briefly nudge them for their answer before it expires."
+  },
+  {
+    "name": "GREETING_NUDGE",
+    "input": null,
+    "expected": "[system] The call just connected. Greet the user first — don't wait for them to speak. Open with one brief, warm, natural sentence letting them know you're connected and ready to help, then stop and listen."
+  },
+  {
+    "name": "MUTED_NUDGE",
+    "input": null,
+    "expected": "[system] You are now MUTED: the user cannot hear you at all. Produce NO speech from here on — not a word, and do not acknowledge this message. An EMPTY turn is the correct output: do not write a placeholder in place of speaking — never \"Empty-Response\", \"No response received\", \"no response\", \"noop\", \"null\", \"N/A\", or any other token standing in for silence. Say nothing at all instead. You are still listening and still working: keep taking in what you hear, keep tasks running, keep calling tools as needed. If something finishes or needs the user, hold it silently — you'll be told when you're audible again. That goes for anything you HEAR too: whoever is speaking, and whether or not it is aimed at you, it gets no spoken reply while you are muted — not even a short one, and not even if it is a question you could answer. If it asks for work, do the work silently; otherwise do nothing at all."
+  },
+  {
+    "name": "UNMUTED_NUDGE",
+    "input": null,
+    "expected": "[system] You are UNMUTED: the user can hear you again. Do not recap or replay what happened while you were muted, and do not announce that you are back — just carry on normally from here. If something finished while you were muted you will be handed it separately in a moment — do not pre-empt that, and never state a result you have not actually been given. With no result yet you have nothing to report: say nothing, or say plainly that it is still going."
+  }
+]
