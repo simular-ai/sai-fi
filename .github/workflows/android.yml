@@ -1,0 +1,100 @@
+name: build
+
+# The only automated gate this repo has. There is no instrumentation suite and no device in CI, so
+# what this proves is narrow and worth stating: the module compiles, and the JVM unit tests pass —
+# among them the cross-port parity tests that hold this Kotlin implementation of the nudge strings,
+# the activity log and the WS protocol to the same JSON fixtures the TypeScript server is held to.
+#
+# What it does NOT prove: anything about audio, the camera, the glasses, or the Compose UI.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push supersedes an in-flight run on the same branch; main is never cancelled.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: assemble + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # JDK 21, not newer. Gradle 8.14.1 rejects JDK 26 with a bare `* What went wrong: 26.0.1`,
+      # which is the same trap documented for local builds — hence Android Studio's bundled 21 there
+      # and Temurin 21 here.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # Meta's Device Access Toolkit resolves from GitHub Packages under the `facebook` org, and the
+      # default `secrets.GITHUB_TOKEN` CANNOT read another organisation's packages — so this needs a
+      # classic PAT with `read:packages`, stored as the repo secret DAT_PACKAGES_TOKEN. (It cannot be
+      # named GITHUB_*: Actions rejects secret names with that prefix.) settings.gradle.kts prefers
+      # the env var over local.properties, so mapping it here is all that is required.
+      #
+      # The DAT modules are on the unit-test compile classpath, so without this even
+      # testDebugUnitTest cannot run — the failure is a 401 from maven.pkg.github.com, which reads
+      # like a network problem and isn't.
+      - name: Check the DAT packages token is present
+        env:
+          TOKEN: ${{ secrets.DAT_PACKAGES_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::DAT_PACKAGES_TOKEN is not set. Add a classic PAT with read:packages as a"
+            echo "::error::repository secret. Without it the Meta DAT SDK cannot resolve and the"
+            echo "::error::build fails with a 401 from maven.pkg.github.com."
+            exit 1
+          fi
+
+      # No local.properties is written. Every other key defaults to an empty string in
+      # build.gradle.kts, so the app compiles without credentials — it just cannot make a call, which
+      # is fine for a compile-and-unit-test gate. sdk.dir is unnecessary because ANDROID_HOME is set.
+      #
+      # --rerun matters: without it Gradle reports the test task UP-TO-DATE from cache and the gate
+      # silently verifies nothing.
+      - name: Assemble and test
+        working-directory: meta-android-app
+        env:
+          GITHUB_TOKEN: ${{ secrets.DAT_PACKAGES_TOKEN }}
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --rerun --stacktrace
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-results
+          path: meta-android-app/app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore
+
+  presenter:
+    name: presenter typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: presenter/package-lock.json
+      - working-directory: presenter
+        run: npm ci
+      - working-directory: presenter
+        run: npx tsc --noEmit
