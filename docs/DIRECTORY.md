@@ -115,7 +115,8 @@ What happens between the user speaking and the agent working, and back. Ported f
 [`VOICE_FSM.md`](VOICE_FSM.md) for why each rule exists. Everything except `Concierge.kt` is pure —
 no coroutines, no clock, no I/O — which is what makes the golden catalog runnable as JVM tests.
 
-**Not yet wired into `CallService`**: the app still runs the WebSocket path while the port is proven.
+**This drives every call.** `CallService.buildConcierge` constructs a `VoiceSession` per call, the
+model's tool calls go into `applyEffects`, and the WebSocket path it replaced is deleted.
 
 | File (`…/saispike/fsm/`) | What it does |
 | --- | --- |

@@ -4,8 +4,9 @@ The state machine that decides what happens between the user speaking and the ag
 between the agent reporting and the user hearing about it. It lives in
 `meta-android-app/…/saispike/fsm/`.
 
-**Status:** ported and unit-tested; not yet wired into `CallService`. See "Where this is going" at
-the end.
+**Status:** live. `CallService` builds a `VoiceSession` per call and the model's tool calls go
+straight into it; the WebSocket and the server-side FSM it used to talk to are both deleted. What is
+still open is listed under "Where this is going" at the end.
 
 This is a design doc, not an API reference — the KDoc on each class covers the *what*. What follows
 is the *why*, because most of these rules exist to prevent a specific failure that was seen on a real
@@ -263,13 +264,12 @@ green with less in it.
 
 ## Where this is going
 
-The FSM is ported, tested, and reaching the agent over `/v1/agents/*`, but it is **not yet driving a
-call**. The remaining work is all in `CallService`:
+The FSM drives calls today. What is left is smaller, and none of it blocks a build:
 
-1. `CallController` delegates to the FSM instead of reacting to server directives; `AgentEventRouter`
-   and `HeldNudgeQueue` fold in rather than running a second queue.
-2. `VoiceSession.start()` is called for the call, and the model's tool calls routed into
-   `applyEffects`.
+1. `AgentEventRouter` and `HeldNudgeQueue` still run alongside the FSM rather than inside it. They
+   decide whether to nudge the model about an event the FSM has already interpreted, which is a
+   second queue with its own timing rules. Folding them in would put every "when do we speak"
+   decision in one place.
 
 Two things worth deciding on rather than inheriting:
 

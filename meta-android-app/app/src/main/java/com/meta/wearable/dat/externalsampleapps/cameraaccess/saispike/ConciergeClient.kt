@@ -2,7 +2,12 @@
  * sai-fi — voice concierge.
  */
 
-// ConciergeClient — client for the voice concierge hosted in cloud-api (POST /v1/concierge/session).
+// ConciergeClient — the read-only half of the agent API: machines, history, and image upload.
+//
+// Named for an endpoint that no longer exists. What it holds now is everything a call needs from
+// cloud-api that is NOT a task: `GET /v1/agents/machines` for the picker, `GET /v1/agents/context`
+// behind `recallHistory`, and `POST /v1/agents/upload` for a glasses capture. Sending work is
+// VoiceChannelClient's job.
 //
 // Auth = a fresh Firebase ID token (from SaiAuth) sent as a Bearer header — cloud-api's
 // authMiddleware verifies it per-user, exactly as for the web/desktop app (never put the token in a

@@ -32,8 +32,6 @@ import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -132,13 +130,15 @@ class VoiceSession(
             follow: Boolean,
         ) {
           val stream =
-              VoiceChannelClient.openMessageStream(
-                  baseUrl = baseUrl,
-                  bearerToken = token(),
-                  machineId = machineId,
-                  message = message,
-                  attachments = attachments,
-              )
+              endCallIfRejected {
+                VoiceChannelClient.openMessageStream(
+                    baseUrl = baseUrl,
+                    bearerToken = token(),
+                    machineId = machineId,
+                    message = message,
+                    attachments = attachments,
+                )
+              }
           // A steer lands in a turn already being read; reading its stream too would deliver every
           // event of that turn a second time.
           if (!follow) {
@@ -149,7 +149,10 @@ class VoiceSession(
         }
 
         override suspend fun post(path: String, body: JSONObject): JSONObject =
-            VoiceChannelClient.postOperation(baseUrl, token(), path, body.put("machineId", machineId))
+            endCallIfRejected {
+              VoiceChannelClient.postOperation(
+                  baseUrl, token(), path, body.put("machineId", machineId))
+            }
       }
 
   val bridge = HttpAgentBridge(machineId, transport, onLog)
@@ -229,12 +232,19 @@ class VoiceSession(
    * A drop is NOT reconnected. The stream belongs to one turn, and there is no way to rejoin a turn
    * already in progress — so the honest thing is to stop following it. The FSM would otherwise sit
    * in `working` forever, so the turn is closed out here on the way past.
+   *
+   * Nothing here reports a PERMANENT rejection, because the status was already checked when the
+   * stream was opened — see [endCallIfRejected], which is the write path and the only place a 401 or
+   * a 403 can now surface.
    */
   private fun followTurn(stream: VoiceChannelClient.TurnStream) {
     turnJob?.cancel()
     turnJob =
         scope.launch {
           try {
+            // Reaching the agent again clears any earlier failure. Reported on the way IN rather
+            // than held for the whole call, because between turns there is nothing connected to
+            // report the state of.
             onConnectionChange(true)
             stream.read(
                 onEvent = { event ->
@@ -244,16 +254,11 @@ class VoiceSession(
                 },
                 onLog = onLog,
             )
-          } catch (e: ConciergeHttpException) {
-            onLog("[voice] turn stream error ${e.status}: ${e.message}")
-            if (ReconnectPolicy.isPermanent(e.status)) {
-              onLog("[voice] rejected permanently (${e.status}) — ending the call")
-              onPermanentFailure(e.status)
-              return@launch
-            }
+            // Deliberately NOT reported as disconnected here. A turn ending normally is the common
+            // case and leaves nothing connected by design; flagging it would light the chip — which
+            // outranks paused and muted — for the whole gap until the next task.
           } catch (e: Exception) {
             onLog("[voice] turn stream dropped: ${e.message}")
-          } finally {
             onConnectionChange(false)
           }
           // Whatever ended the stream, the turn is over as far as this device can tell. Told to the
@@ -264,6 +269,28 @@ class VoiceSession(
           }
         }
   }
+
+  /**
+   * End the call on a rejection that will not fix itself, and re-throw either way.
+   *
+   * The persistent stream used to be where a 401 or a 403 surfaced, and it ended the call. There is
+   * no persistent stream now: every request is a write, and a write that fails is caught by the FSM,
+   * which apologises and carries on. Without this, an expired credential or a machine that is no
+   * longer the user's would make every task fail identically, forever, with the call still up.
+   *
+   * Re-throws regardless — the FSM still needs to hear that this particular task did not start, and
+   * swallowing it would leave the user with silence instead of an apology.
+   */
+  private suspend fun <T> endCallIfRejected(block: suspend () -> T): T =
+      try {
+        block()
+      } catch (e: ConciergeHttpException) {
+        if (ReconnectPolicy.isPermanent(e.status)) {
+          onLog("[voice] rejected permanently (${e.status}) — ending the call")
+          onPermanentFailure(e.status)
+        }
+        throw e
+      }
 
   /** The model's tool calls, straight into the FSM. No round trip. */
   fun applyEffects(effects: JSONArray) {
