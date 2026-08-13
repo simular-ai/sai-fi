@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -111,32 +112,36 @@ fun HomeScreen(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      // ── Glasses / call ──────────────────────────────────────────────────────────────────────
+      // ── Connection ──────────────────────────────────────────────────────────────────────────
       item {
-        Section(title = "Glasses") {
-          // Falls back to "phone", not "—": there are only two routes, and glasses require an
-          // affirmatively-present SCO device, so "we haven't computed it yet" and "phone" describe the
-          // same speaker. A dash read as though audio were going nowhere.
-          Text(
-              "Audio route: ${s.routeStatus.ifEmpty { "phone" }}",
-              style = MaterialTheme.typography.bodySmall,
-          )
+        Section(title = "Connection") {
           Row(
               horizontalArrangement = Arrangement.spacedBy(8.dp),
               modifier = Modifier.fillMaxWidth(),
           ) {
             Column(modifier = Modifier.weight(1f)) {
+              // "Registration", spelled out, and never a raw enum name. This line used to read
+              // "DAT: AVAILABLE" — `RegistrationState.AVAILABLE` means *not registered, and able to
+              // be*, so the one state that most needs you to act announced itself with the most
+              // reassuring word the SDK has. See [registrationLabel].
               Text(
-                  "DAT: ${ui.glassesReg?.name ?: "—"}",
+                  "Registration: ${registrationLabel(ui.glassesReg)}",
                   style = MaterialTheme.typography.bodySmall,
               )
               Text(
-                  "Link: " +
+                  "Glasses: " +
                       when (ui.glassesLinked) {
                         true -> "connected"
-                        false -> "disconnected"
+                        false -> "not connected"
                         null -> "checking…"
                       },
+                  style = MaterialTheme.typography.bodySmall,
+              )
+              // Falls back to "phone", not "—": there are only two routes, and glasses require an
+              // affirmatively-present SCO device, so "we haven't computed it yet" and "phone" describe
+              // the same speaker. A dash read as though audio were going nowhere.
+              Text(
+                  "Audio: ${s.routeStatus.ifEmpty { "phone" }}",
                   style = MaterialTheme.typography.bodySmall,
               )
             }
@@ -171,6 +176,19 @@ fun HomeScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
           }
+          // What "registration" even is. It is the one word on this screen that names a concept the
+          // user has no way to infer — it is not Bluetooth pairing, it is not signing in, and the
+          // one-app-at-a-time rule is the kind of thing you find out by breaking something else.
+          if (ui.glassesReg != RegistrationState.REGISTERED) {
+            Hint(
+                "Registration is what lets Sai-Fi reach your glasses.",
+                detail =
+                    "It runs through the Meta AI app, which needs Developer Mode on, and it is " +
+                        "separate from Bluetooth pairing and from signing in to Sai. Only ONE " +
+                        "third-party app can be registered at a time, so doing this unregisters " +
+                        "whatever else you had.",
+            )
+          }
           SectionErrorAffordance(
               title = "Glasses error",
               message = ui.glassesError,
@@ -181,16 +199,14 @@ fun HomeScreen(
         }
       }
 
-      // ── The call ────────────────────────────────────────────────────────────────────────────
-      // Everything about the call in one card, in the order it happens: which machine, then Start —
-      // and once it's running, the four controls in Start's place.
-      //
-      // This is a regrouping, not just a reorder. Machine used to be its own card two above this one,
-      // with Start buried at the bottom of Glasses, so the picker and the button it gates were
-      // separated by every glasses control. Splitting on "glasses hardware" vs "this call" puts the
-      // one decision Start depends on directly above Start.
+      // ── Machine ─────────────────────────────────────────────────────────────────────────────
+      // Its own card again, above Call. It is a different KIND of thing from the call controls —
+      // picking which computer does the work is a standing choice you make once and change rarely,
+      // while everything in Call is something you do to the call in front of you. Folding the picker
+      // and Reload in with Start/Mute/Pause put a dropdown and a network retry in a row of call
+      // buttons.
       item {
-        Section(title = "Call") {
+        Section(title = "Machine") {
           var machineMenu by remember { mutableStateOf(false) }
           val dropdownEnabled = ui.machinesFetchOk && ui.machines.isNotEmpty()
           // During a call, show the service's active label (voice/UI switch); else the picker selection.
@@ -241,8 +257,24 @@ fun HomeScreen(
               }
             }
           }
-          if (ui.machinesInfo.isNotEmpty()) {
-            Text(ui.machinesInfo, style = MaterialTheme.typography.bodySmall)
+          Row(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.fillMaxWidth(),
+          ) {
+            if (ui.machinesInfo.isNotEmpty()) {
+              Text(
+                  ui.machinesInfo,
+                  style = MaterialTheme.typography.bodySmall,
+                  modifier = Modifier.weight(1f),
+              )
+            } else {
+              Spacer(Modifier.weight(1f))
+            }
+            // Live during a call too. Switching machines mid-call is supported (the picker calls
+            // `CallController.switchMachine`), so refreshing the list you would switch from has no
+            // reason to be locked.
+            OutlinedButton(border = saiEdge(), onClick = { ui.loadMachines() }) { Text("Reload") }
           }
           SectionErrorAffordance(
               title = "Machines error",
@@ -251,11 +283,18 @@ fun HomeScreen(
               onOpen = { ui.machinesErrorOpen = true },
               onDismiss = { ui.machinesErrorOpen = false },
           )
-          // The auth error belongs on THIS card, not only on the sign-in screen. Two of the three
-          // `showAuthError` call sites are in the Start path (`onStartClicked`'s sign-in re-check and
-          // `startServiceNow`'s token mint) and both are reachable only while signed in — so when the
-          // gate became the only renderer, a token refresh that failed made Start do nothing at all,
-          // with no dialog and no status line. A dead button is the worst possible report of that.
+        }
+      }
+
+      // ── The call ────────────────────────────────────────────────────────────────────────────
+      item {
+        Section(title = "Call") {
+          CallControls(s = s, ui = ui)
+          // The auth error belongs on THIS card, next to Start. Two of the three `showAuthError` call
+          // sites are in the Start path (`onStartClicked`'s sign-in re-check and `startServiceNow`'s
+          // token mint) and both are reachable only while signed in — so when the sign-in gate became
+          // the only renderer, a token refresh that failed made Start do nothing at all, with no
+          // dialog and no status line. A dead button is the worst possible report of that.
           SectionErrorAffordance(
               title = "Sign-in error",
               message = ui.authError,
@@ -264,61 +303,82 @@ fun HomeScreen(
               onDismiss = { ui.authErrorOpen = false },
           )
           if (s.active) {
-            InCallControls(s = s, ui = ui)
+            // Both of these say the whole thing, with no More link. They used to keep the sentence that
+            // changes what you'd DO ("a long pause ends the call") in the collapsed half, which is the
+            // one thing detail-on-demand must never hide — the notification has said it outright all
+            // along, and the screen should not be coyer than the notification.
+            when {
+              s.paused ->
+                  Hint(
+                      "Paused — the mic is off, so Sai hears nothing. A long pause ends the call." +
+                          if (s.saiMuted) " Sai will come back muted when you resume." else "",
+                  )
+              s.saiMuted ->
+                  Hint(
+                      "Muted — Sai still hears you and keeps working, it just won't speak. " +
+                          "Anything that finishes while muted is held and offered after you unmute.",
+                  )
+            }
+            // Unavoidable, so make it expected. DAT reports folding, taking the glasses off, walking
+            // out of range and holding the temple as ONE indistinguishable "session stopped", and the
+            // call goes with it. A wearer who doesn't know that is left talking to nobody.
+            Hint("Folding the glasses, taking them off, or losing Bluetooth ends the call.")
+            // While a capture is in flight, say so — that wait is seconds long (more with a
+            // cold-camera retry) and the button gave no feedback at all until the photo landed.
+            if (s.capturing) {
+              Text(
+                  if (s.capture == null) "Taking a photo…" else "Taking a new photo…",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = SaiTheme.colors.brand,
+              )
+            }
+            s.capture?.let { CaptureThumbnail(it) }
+          } else if (ui.selectedMachine == null || !ui.machinesFetchOk) {
+            // Why Start is dead, said where Start is. The Machine card above is where you fix it, but
+            // it is a separate card now, so the reason has to travel with the disabled button.
+            Hint(
+                if (!ui.machinesFetchOk) "Load your machines before starting a call."
+                else "Pick a machine before starting a call.",
+            )
           } else {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-              // The call's audio runs over the phone mic + Bluetooth (SCO to the glasses when
-              // available), independent of the DAT session. So don't gate Start on the DAT link —
-              // only a selected machine is required. The glasses temple button and camera capture DO
-              // need a DAT-eligible device; we warn when it isn't linked rather than block.
-              //
-              // The `ui.signedIn` clause this used to carry is gone: behind the gate it is always
-              // true, so it only obscured the two conditions that can still fail.
-              Button(
-                  enabled = ui.machinesFetchOk && ui.selectedMachine != null,
-                  onClick = { ui.onStartClicked() },
-                  modifier = Modifier.weight(1f).height(48.dp),
-              ) {
-                Text("Start call")
-              }
-              OutlinedButton(border = saiEdge(), onClick = { ui.loadMachines() }) { Text("Reload") }
+            // One line, detail on demand. This was a four-sentence paragraph — the single biggest
+            // contributor to the wall-of-grey-text look, and it sat directly under the button you
+            // were trying to read.
+            //
+            // Two different degraded starts, and only the first used to be called out. A linked pair
+            // with no camera grant looks completely healthy here, right up until "take a photo"
+            // fails mid-call with nothing on this screen having warned you.
+            //
+            // `== false`, not `!= true`: this asserts something about the glasses, so it needs DAT to
+            // have actually said it. On the unknown state it used to claim "aren't linked" on the same
+            // screen that was simultaneously reporting "checking…" — contradicting itself, and
+            // contradicting the contract on VoiceConciergeActivity.glassesLinked. Neither hint shows
+            // while unknown, which is the honest answer and a brief one.
+            if (ui.glassesLinked == false) {
+              Hint(
+                  "Glasses aren't connected — the call runs on phone audio.",
+                  detail =
+                      "The call will run on phone/Bluetooth audio, but the temple button and photo " +
+                          "capture won't work until the glasses are on, unfolded, in range, and " +
+                          "registered. A \"no eligible device\" error means the glasses aren't paired " +
+                          "for this app yet.",
+              )
+            } else if (!ui.glassesCameraGranted) {
+              Hint(
+                  "Camera isn't granted — Sai can't see or take photos on this call.",
+                  detail =
+                      "Audio and the temple button work. Anything that needs the glasses camera — " +
+                          "\"take a photo\", or a question about what you're looking at — will fail " +
+                          "until you use \"Grant glasses camera\" in Connection above.",
+              )
             }
-            if (ui.machinesFetchOk && ui.selectedMachine != null) {
-              // One line, detail on demand. This was a four-sentence paragraph — the single biggest
-              // contributor to the wall-of-grey-text look, and it sat directly under the button you
-              // were trying to read.
-              //
-              // Two different degraded starts, and only the first used to be called out. A linked pair
-              // with no camera grant looks completely healthy here, right up until "take a photo"
-              // fails mid-call with nothing on this screen having warned you.
-              //
-              // `== false`, not `!= true`: this asserts something about the glasses, so it needs DAT to
-              // have actually said it. On the unknown state it used to claim "aren't linked" on the same
-              // screen that was simultaneously reporting "Link: checking…" — contradicting itself, and
-              // contradicting the contract on VoiceConciergeActivity.glassesLinked. Neither hint shows
-              // while unknown, which is the honest answer and a brief one.
-              if (ui.glassesLinked == false) {
-                Hint(
-                    "Glasses aren't linked — the call runs on phone audio.",
-                    detail =
-                        "The call will run on phone/Bluetooth audio, but the temple button and photo " +
-                            "capture won't work until the glasses are on, unfolded, in range, and " +
-                            "registered. A \"no eligible device\" error means the glasses aren't paired " +
-                            "for this app yet.",
-                )
-              } else if (!ui.glassesCameraGranted) {
-                Hint(
-                    "Camera isn't granted — Sai can't see or take photos on this call.",
-                    detail =
-                        "Audio and the temple button work. Anything that needs the glasses camera — " +
-                            "\"take a photo\", or a question about what you're looking at — will fail " +
-                            "until you use \"Grant glasses camera\" above.",
-                )
-              }
-            }
+          }
+          if (s.status.isNotEmpty()) {
+            Text(
+                s.status,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
           }
         }
       }
@@ -327,25 +387,51 @@ fun HomeScreen(
 }
 
 /**
- * The four controls a live call has, plus what it is currently doing.
+ * Plain English for [RegistrationState], which has five values and no obvious ones.
  *
- * Two rows of two. Emphasis is carried by fill, not by size: Mute is the one control you reach for
- * constantly (and the one the room sees, since the screen is mirrored to the dashboard) so it's the
- * only filled button up top; Photo and Pause sit on the app background so they read as
- * available-but-quiet against the card they're on. Stop is filled in the error colour — it's the one
- * action you can't undo mid-demo, and it should look different from everything you might tap by
- * accident.
+ * This line used to print the enum name straight through — "DAT: AVAILABLE" — and `AVAILABLE` means
+ * *not registered, and able to be*. So the single state that requires the user to go and do something
+ * announced itself with the most reassuring word in the set, next to a button whose job was to fix it.
+ *
+ * `null` is "checking…", not "no": the flow behind this is seeded before DAT answers, and the app's
+ * standing rule (see `VoiceConciergeActivity.glassesLinked`) is never to let an unknown read as a
+ * negative.
+ */
+private fun registrationLabel(state: RegistrationState?): String =
+    when (state) {
+      RegistrationState.REGISTERED -> "registered"
+      RegistrationState.REGISTERING -> "registering…"
+      RegistrationState.UNREGISTERING -> "unregistering…"
+      RegistrationState.AVAILABLE -> "not registered"
+      // Meta AI can't take a registration at all: app missing/too old, or Developer Mode off.
+      RegistrationState.UNAVAILABLE -> "unavailable — check the Meta AI app"
+      null -> "checking…"
+    }
+
+/**
+ * The four call controls, always all four, in a fixed 2×2.
+ *
+ * Every button is on screen from the start and only Start is enabled, rather than three buttons
+ * appearing the instant a call begins. The layout no longer moves under your thumb at the one moment
+ * you are most likely to be reaching for it, and the controls a call *has* are legible before you
+ * commit to one — which is the honest answer to "what can this thing do".
+ *
+ * Start and End are the SAME slot, bottom-right, because they are the same decision in two states.
+ * That keeps End where Start was: by the time you want to hang up you have already tapped that
+ * position once, and it is the one action here you cannot undo.
+ *
+ * Emphasis is carried by fill, not size. Mute is the control you reach for constantly (and the one the
+ * room sees, since the screen is mirrored to the dashboard), so it is the only filled button up top;
+ * Photo and Pause are outlined, which leaves their container transparent so they sit on the CARD
+ * rather than punching through to the app background. Border: see [saiEdge].
  *
  * Pause is heavier than mute: it drops the mic entirely, so Sai stops hearing you too. The two aren't
- * orthogonal — pause suspends the Live session, so while paused there's nothing to mute or unmute and
+ * orthogonal — pause suspends the Live session, so while paused there is nothing to mute or unmute and
  * the mute button would flip a label with no audible effect. Pause dominates and mute greys out; the
  * mute state is preserved, so resuming returns you to whichever you chose.
- *
- * OutlinedButton leaves the container transparent, so Photo and Pause sit on the CARD rather than
- * punching a hole through to the app background. Border: see [saiEdge].
  */
 @Composable
-private fun InCallControls(s: CallController.State, ui: VoiceConciergeActivity) {
+private fun CallControls(s: CallController.State, ui: VoiceConciergeActivity) {
   val ctx = LocalContext.current
   Row(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -353,7 +439,8 @@ private fun InCallControls(s: CallController.State, ui: VoiceConciergeActivity) 
   ) {
     OutlinedButton(
         border = saiEdge(),
-        enabled = ui.glassesReg == RegistrationState.REGISTERED && ui.glassesCameraGranted,
+        enabled =
+            s.active && ui.glassesReg == RegistrationState.REGISTERED && ui.glassesCameraGranted,
         onClick = { CallController.capturePhoto(ctx) },
         modifier = Modifier.weight(1f).height(48.dp),
     ) {
@@ -363,7 +450,7 @@ private fun InCallControls(s: CallController.State, ui: VoiceConciergeActivity) 
     }
     Button(
         onClick = { CallController.toggleMute(ctx) },
-        enabled = !s.paused,
+        enabled = s.active && !s.paused,
         modifier = Modifier.weight(1f).height(48.dp),
     ) {
       Icon(
@@ -382,6 +469,7 @@ private fun InCallControls(s: CallController.State, ui: VoiceConciergeActivity) 
   ) {
     OutlinedButton(
         border = saiEdge(),
+        enabled = s.active,
         onClick = { CallController.togglePause(ctx) },
         modifier = Modifier.weight(1f).height(48.dp),
     ) {
@@ -395,56 +483,37 @@ private fun InCallControls(s: CallController.State, ui: VoiceConciergeActivity) 
       Spacer(Modifier.width(6.dp))
       Text(if (s.paused) "Resume call" else "Pause call")
     }
-    Button(
-        onClick = { CallController.stop(ctx) },
-        colors =
-            ButtonDefaults.buttonColors(
-                containerColor = SaiTheme.colors.danger,
-                contentColor = SaiTheme.colors.onDanger,
-            ),
-        modifier = Modifier.weight(1f).height(48.dp),
-    ) {
-      Icon(Icons.Filled.CallEnd, contentDescription = null, modifier = Modifier.size(18.dp))
-      Spacer(Modifier.width(6.dp))
-      Text("End call")
+    if (s.active) {
+      Button(
+          onClick = { CallController.stop(ctx) },
+          colors =
+              ButtonDefaults.buttonColors(
+                  containerColor = SaiTheme.colors.danger,
+                  contentColor = SaiTheme.colors.onDanger,
+              ),
+          modifier = Modifier.weight(1f).height(48.dp),
+      ) {
+        Icon(Icons.Filled.CallEnd, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("End call")
+      }
+    } else {
+      // The call's audio runs over the phone mic + Bluetooth (SCO to the glasses when available),
+      // independent of the DAT session. So Start is NOT gated on the glasses — only on a selected
+      // machine. The temple button and camera capture do need a DAT-eligible device; the hints below
+      // warn about that rather than blocking.
+      //
+      // The `ui.signedIn` clause this used to carry is gone: behind the sign-in gate it is always
+      // true, so it only obscured the two conditions that can still fail.
+      Button(
+          enabled = ui.machinesFetchOk && ui.selectedMachine != null,
+          onClick = { ui.onStartClicked() },
+          modifier = Modifier.weight(1f).height(48.dp),
+      ) {
+        Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Start call")
+      }
     }
-  }
-  // Both of these say the whole thing, with no More link. They used to keep the sentence that
-  // changes what you'd DO ("a long pause ends the call") in the collapsed half, which is the
-  // one thing detail-on-demand must never hide — the notification has said it outright all
-  // along, and the screen should not be coyer than the notification. `Hint`'s collapse stays
-  // for what it was built for: the four-sentence glasses-not-linked paragraph above.
-  when {
-    s.paused ->
-        Hint(
-            "Paused — the mic is off, so Sai hears nothing. A long pause ends the call." +
-                if (s.saiMuted) " Sai will come back muted when you resume." else "",
-        )
-    s.saiMuted ->
-        Hint(
-            "Muted — Sai still hears you and keeps working, it just won't speak. " +
-                "Anything that finishes while muted is held and offered after you unmute.",
-        )
-  }
-  // Unavoidable, so make it expected. DAT reports folding, taking the glasses off, walking out
-  // of range and holding the temple as ONE indistinguishable "session stopped", and the call
-  // goes with it. A wearer who doesn't know that is left talking to nobody.
-  Hint("Folding the glasses, taking them off, or losing Bluetooth ends the call.")
-  // While a capture is in flight, say so — that wait is seconds long (more with a cold-camera
-  // retry) and the button gave no feedback at all until the photo landed.
-  if (s.capturing) {
-    Text(
-        if (s.capture == null) "Taking a photo…" else "Taking a new photo…",
-        style = MaterialTheme.typography.bodySmall,
-        color = SaiTheme.colors.brand,
-    )
-  }
-  s.capture?.let { CaptureThumbnail(it) }
-  if (s.status.isNotEmpty()) {
-    Text(
-        s.status,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
   }
 }

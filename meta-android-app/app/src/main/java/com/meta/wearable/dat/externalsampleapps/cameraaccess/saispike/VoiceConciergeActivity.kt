@@ -62,6 +62,37 @@ import kotlinx.coroutines.withTimeoutOrNull
  */
 private const val LINK_PROBE_TIMEOUT_MS = 1_500L
 
+/**
+ * Bounds and step for the ask-first threshold.
+ *
+ * 0 is a real choice, not a floor to be avoided — it means "check with me about everything" — so the
+ * minimum is 0 rather than one step. The maximum exists because the field takes four digits and 9999
+ * seconds is nearly three hours of an open microphone before Sai says anything, which nobody selects
+ * on purpose. An hour is already far past useful and is a round number to state.
+ */
+const val ASK_FIRST_MIN_SEC = 0
+const val ASK_FIRST_MAX_SEC = 3_600
+const val ASK_FIRST_STEP_SEC = 5
+
+/**
+ * One stepper notch from [current], snapped to the [ASK_FIRST_STEP_SEC] grid and clamped.
+ *
+ * Snapping rather than plain addition, because the field also accepts typed values: from a typed 17,
+ * "+" means 20, not 22 — the notch goes to the next round number, so repeated taps converge on the
+ * grid instead of carrying an arbitrary offset forever. Going down from a value already on the grid
+ * moves a full step (15 → 10); going down from off-grid lands on the grid (17 → 15).
+ *
+ * Pure and top-level so it can be tested without an Activity; the rounding either side of the grid is
+ * exactly the kind of thing that is quietly off by one step.
+ */
+fun steppedAskFirstSec(current: Int, up: Boolean): Int {
+  val step = ASK_FIRST_STEP_SEC
+  val notch =
+      if (up) (current / step + 1) * step
+      else if (current % step != 0) (current / step) * step else current - step
+  return notch.coerceIn(ASK_FIRST_MIN_SEC, ASK_FIRST_MAX_SEC)
+}
+
 // The control surface AND its state. `ConciergeScreen` renders this directly — there was an interface
 // (`ConciergeUi`) between them whose only job was to narrow what the composables could touch, but with
 // one implementer and one caller it was ceremony. The `val` vs `var` split below is the contract it
@@ -94,16 +125,57 @@ class VoiceConciergeActivity : ComponentActivity() {
     private set
 
   /**
-   * Settings' write path for [askFirstThresholdSec]: keeps the field and [Prefs] in step.
+   * Keystroke handler for the ask-first field: keeps the field and [Prefs] in step as you type.
    *
    * Named `on…Changed` rather than `set…` because a `setDevMode`/`setAskFirstThresholdSec` would
    * collide on the JVM with the property's own generated setter.
+   *
+   * Persisting per keystroke rather than only on commit is the belt to [commitAskFirstSec]'s braces:
+   * last write wins, so the intermediate "1" on the way to "15" costs nothing, and no edit can be
+   * lost by backgrounding the app mid-type. [commitAskFirstSec] is what makes the value *tidy*.
    */
   fun onAskFirstSecChanged(typed: String) {
     askFirstThresholdSec = typed.filter(Char::isDigit).take(4)
     // Only persist a value that parses. Blanking the field to retype it must not write a 0 that
     // becomes "ask immediately" if the app dies before the user finishes.
     askFirstThresholdSec.toIntOrNull()?.let { Prefs.setAskFirstSec(this, it) }
+  }
+
+  /**
+   * Settle the ask-first field: normalise what is showing, clamp it, and persist.
+   *
+   * Called when the user says they are done — the keyboard's Done key, or focus leaving the field.
+   * Two things it fixes, both of which were silently wrong before there was any commit step:
+   *
+   *  - An EMPTY field. Nothing was persisted for it (the parse guard above), so the stored value
+   *    stayed at whatever it last was while the field showed nothing at all. Now the field snaps back
+   *    to the value actually in force, so what you see is what Sai will do.
+   *  - A value outside [ASK_FIRST_MIN_SEC]..[ASK_FIRST_MAX_SEC]. The field takes four digits, so 9999
+   *    was reachable by typing — two and three quarter hours of an open microphone before Sai checks
+   *    back, which is not a setting anyone means to choose.
+   *
+   * Returns the committed value so the UI can confirm it.
+   */
+  fun commitAskFirstSec(): Int {
+    val settled =
+        (askFirstThresholdSec.toIntOrNull() ?: Prefs.askFirstSec(this))
+            .coerceIn(ASK_FIRST_MIN_SEC, ASK_FIRST_MAX_SEC)
+    askFirstThresholdSec = settled.toString()
+    Prefs.setAskFirstSec(this, settled)
+    return settled
+  }
+
+  /**
+   * Step the ask-first value one notch [up], clamped, and commit it.
+   *
+   * The stepper's own tap IS the confirmation — the number moves under your finger and the keyboard
+   * never opens — which is why this commits immediately rather than waiting for a focus change.
+   * Arithmetic is [steppedAskFirstSec], which is pure and tested.
+   */
+  fun nudgeAskFirstSec(up: Boolean) {
+    val settled = steppedAskFirstSec(askFirstThresholdSec.toIntOrNull() ?: Prefs.askFirstSec(this), up)
+    askFirstThresholdSec = settled.toString()
+    Prefs.setAskFirstSec(this, settled)
   }
 
   /** Settings' write path for [devMode]. */
@@ -777,8 +849,12 @@ class VoiceConciergeActivity : ComponentActivity() {
               machineLabel = m.label,
               machines = machines.toList(),
               useGlasses = useGlasses,
-              askFirstThresholdMs =
-                  (askFirstThresholdSec.toLongOrNull() ?: 15L).coerceAtLeast(0L) * 1000L,
+              // commit rather than parse-with-a-fallback: starting a call settles the field, so the
+              // threshold the call runs on is the same clamped number Settings will show for the rest
+              // of it. Parsing here meant a field left blank (or at a typed 9999) silently started the
+              // call on a different value than the one on screen — and the in-call read-only line
+              // renders that same field, so it would have displayed the blank.
+              askFirstThresholdMs = commitAskFirstSec().toLong() * 1000L,
           ))
     }
   }

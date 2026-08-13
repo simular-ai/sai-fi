@@ -19,23 +19,45 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.BuildConfig
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ASK_FIRST_MAX_SEC
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ASK_FIRST_MIN_SEC
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.CallController
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.VoiceConciergeActivity
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.theme.SaiTheme
+import kotlinx.coroutines.delay
 
 @Composable
 fun SettingsScreen(
@@ -109,30 +131,14 @@ fun SettingsScreen(
             )
             Hint("Settings lock during a call.")
           } else {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-              OutlinedTextField(
-                  value = ui.askFirstThresholdSec,
-                  onValueChange = { ui.onAskFirstSecChanged(it) },
-                  label = { Text("Ask first after") },
-                  singleLine = true,
-                  modifier = Modifier.width(160.dp),
-              )
-              Text(
-                  "seconds",
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
+            AskFirstField(ui)
             Hint(
                 "How long Sai works before checking back with you.",
                 detail =
                     "Below this, Sai finishes the job and tells you when it's done. Above it, Sai " +
                         "comes back to confirm before carrying on — so a short value means more " +
-                        "interruptions and more control, and a long one means fewer of both.",
+                        "interruptions and more control, and a long one means fewer of both. Zero " +
+                        "means check with you about everything.",
             )
           }
         }
@@ -196,6 +202,127 @@ fun SettingsScreen(
           }
         }
       }
+    }
+  }
+}
+
+/**
+ * The ask-first threshold: a stepper either side of a typable number, and an explicit "Saved".
+ *
+ * This was a bare `OutlinedTextField`, and the complaint about it was right — there was no way to
+ * confirm an edit. Three separate things were wrong, and a confirmation alone would only have fixed
+ * the first:
+ *
+ *  1. **Nothing acknowledged the change.** The value was written on every keystroke, so it *was*
+ *     saved, but the screen said so nowhere. Silence is indistinguishable from a field that does
+ *     nothing.
+ *  2. **No way to finish.** The default keyboard had no Done key and the field never lost focus, so
+ *     the keyboard sat over the rest of Settings until you pressed system Back. It was not even a
+ *     numeric keypad — a digits-only field asking with a full QWERTY.
+ *  3. **Blanking it was silently a no-op.** Clearing the field to retype persisted nothing (an empty
+ *     string doesn't parse), so the stored value quietly stayed put while the field showed nothing.
+ *     Walking away there left the screen disagreeing with what Sai would actually do.
+ *
+ * So the stepper is the primary control: it never opens a keyboard, and the number moving under your
+ * finger is its own acknowledgement. The field stays for typing an exact value, now with a numeric
+ * keypad and a Done key that commits and dismisses it. Commit also happens on focus loss, so tapping
+ * anywhere else settles the edit rather than abandoning it, and `commitAskFirstSec` clamps the value
+ * and re-fills a blank field from what is actually in force.
+ *
+ * `edited` is tracked here rather than inferred by comparing the field against what is stored: the
+ * per-keystroke write means storage already agrees with the field, so a comparison can never tell
+ * "typed something" from "just tapped in and out".
+ */
+@Composable
+private fun AskFirstField(ui: VoiceConciergeActivity) {
+  val focus = LocalFocusManager.current
+  var commits by remember { mutableIntStateOf(0) }
+  var edited by remember { mutableStateOf(false) }
+  var showSaved by remember { mutableStateOf(false) }
+  // Keyed on the commit COUNT, not the value: committing the same number is still an answer to "did
+  // that take?", and re-firing the flash on an unchanged value is the point.
+  LaunchedEffect(commits) {
+    if (commits == 0) return@LaunchedEffect
+    showSaved = true
+    delay(1_600)
+    showSaved = false
+  }
+  val current = ui.askFirstThresholdSec.toIntOrNull()
+
+  Row(
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.fillMaxWidth(),
+  ) {
+    OutlinedIconButton(
+        onClick = {
+          ui.nudgeAskFirstSec(up = false)
+          edited = false
+          commits++
+        },
+        // A blank or unparseable field leaves the stepper live: tapping it is then a way OUT of that
+        // state (nudge reads through to the stored value), not another dead control.
+        enabled = current == null || current > ASK_FIRST_MIN_SEC,
+        border = saiEdge(),
+        modifier = Modifier.size(48.dp),
+    ) {
+      Icon(Icons.Filled.Remove, contentDescription = "Less time")
+    }
+    OutlinedTextField(
+        value = ui.askFirstThresholdSec,
+        onValueChange = {
+          edited = true
+          ui.onAskFirstSecChanged(it)
+        },
+        label = { Text("Ask first after (s)") },
+        singleLine = true,
+        keyboardOptions =
+            KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+        keyboardActions =
+            KeyboardActions(
+                onDone = {
+                  ui.commitAskFirstSec()
+                  edited = false
+                  commits++
+                  focus.clearFocus()
+                },
+            ),
+        modifier =
+            Modifier.weight(1f).onFocusChanged { state ->
+              // On the way OUT only, and only if something was typed — otherwise tapping in and
+              // straight back out would claim to have saved an edit nobody made.
+              if (!state.isFocused && edited) {
+                ui.commitAskFirstSec()
+                edited = false
+                commits++
+              }
+            },
+    )
+    OutlinedIconButton(
+        onClick = {
+          ui.nudgeAskFirstSec(up = true)
+          edited = false
+          commits++
+        },
+        enabled = current == null || current < ASK_FIRST_MAX_SEC,
+        border = saiEdge(),
+        modifier = Modifier.size(48.dp),
+    ) {
+      Icon(Icons.Filled.Add, contentDescription = "More time")
+    }
+  }
+  if (showSaved) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+          Icons.Filled.Check,
+          contentDescription = null,
+          tint = SaiTheme.colors.accent,
+          modifier = Modifier.size(14.dp),
+      )
+      Text("Saved", style = MaterialTheme.typography.labelMedium, color = SaiTheme.colors.accent)
     }
   }
 }

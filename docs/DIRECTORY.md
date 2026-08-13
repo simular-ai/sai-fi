@@ -67,8 +67,8 @@ below — the path still carries the app's earlier name).
 | `VoiceConciergeActivity.kt` | The UI's controller **and** its state: sign-in, the machine list, glasses registration, the two persisted settings, Start/Stop. Renders `CallController.state`; holds no call state. |
 | `ui/ConciergeScreen.kt` | The shell, and nothing else: the sign-in gate, then a `Scaffold` with the bottom `NavigationBar`. ~110 lines — it used to be the whole UI at 952. |
 | `ui/SignInScreen.kt` | The gate. Signed out, this is the entire app: logo, title, one Google button. |
-| `ui/HomeScreen.kt` | Status chip, the glasses card, and the call card (machine picker → Start, or the four in-call controls). Was the "Controls" tab. |
-| `ui/SettingsScreen.kt` | Account + sign-out, the ask-first threshold, the developer-mode switch, and which build this is. |
+| `ui/HomeScreen.kt` | Status chip and three cards: **Connection** (registration, glasses link, audio route), **Machine** (picker + reload), **Call** (all four controls, always visible; Start and End share the same slot). Was the "Controls" tab. |
+| `ui/SettingsScreen.kt` | Account + sign-out, the ask-first threshold (stepper + typable field, committed on Done/blur), the developer-mode switch, and which build this is. |
 | `ui/LogsScreen.kt` | The interleaved transcript + log stream and the text composer. Only reachable with developer mode on. |
 | `ui/SaiTab.kt` | The three bottom-bar destinations, plus the pure rule for which exist (`tabsFor` / `coerceTab`). |
 | `ui/SaiComponents.kt` | The pieces every screen shares: `Section`, `GroupHeader`, `Hint`, `CallStatusChip`, `CaptureThumbnail`, the error dialog, the location rationale. |
@@ -174,12 +174,12 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 
 ### Tests — `app/src/test/java/…/saispike/`
 
-Fast JVM unit tests (22 classes, 239 tests, no device/emulator needed). Three kinds:
+Fast JVM unit tests (23 classes, 245 tests, no device/emulator needed). Three kinds:
 
 - **`*Test.kt`** — behaviour tests for one class each (`GlassesLinkTest`, `HangupPolicyTest`,
   `ReconnectPolicyTest`, `GreetingGateTest`, `HeldNudgeQueueTest`, `MachineSwitcherTest`,
   `AgentEventRouterTest`, `ActivityLogTest`, `ConciergeProtocolTest`,
-  `CallNotificationTextTest`, `PresenterSocketTest`, `ui/SaiTabTest`).
+  `CallNotificationTextTest`, `PresenterSocketTest`, `AskFirstStepperTest`, `ui/SaiTabTest`).
 - **`*ParityTest.kt`** — replay a shared fixture to prove the Kotlin port matches the server
   (`ConciergeProtocolParityTest`, `ActivityLogParityTest`).
 - **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 59 scenarios ported from the
