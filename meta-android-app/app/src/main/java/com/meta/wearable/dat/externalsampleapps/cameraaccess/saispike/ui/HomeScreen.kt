@@ -1,14 +1,22 @@
 /*
- * sai-fi — Home: the glasses, the machine, and Start/Stop.
+ * sai-fi — Home: the connection, the machine, and the call.
  */
 
 // Was the "Controls" tab, and was four cards: Account, Machines, Glasses, Settings. Account moved to
-// the sign-in gate and to Settings; the ask-first field moved to Settings. What's left is the two
-// things a call needs, in the order the call needs them — the glasses you're speaking through, then
-// the machine doing the work, then Start.
+// the sign-in gate and to Settings; the ask-first field moved to Settings. What's left is three cards
+// in the order a call needs them:
 //
-// Machine sits BELOW Glasses now, which reverses the old order. It is the last decision before Start
-// and belongs next to it; it used to be two cards further up, with the glasses controls in between.
+//   Connection — what you speak through. Registration, the glasses link, the audio route.
+//   Machine    — which computer does the work. A standing choice, changed rarely.
+//   Call        — everything you do to the call in front of you.
+//
+// The Call card's four controls are ALL present at all times; only their enablement changes. And its
+// primary slot (bottom-right) is never a dead button — it carries whatever the next available action
+// is: "Load machines" → "Start call" → "End call".
+
+// ── The state this reads ─────────────────────────────────────────────────────────────────────────
+// Everything comes off the Activity as Compose snapshot state, plus `s` (the service's call state)
+// passed in from the shell. Only the `var` fields on the Activity are written from here.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui
 
@@ -33,6 +41,7 @@ import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -125,7 +134,7 @@ fun HomeScreen(
               // be*, so the one state that most needs you to act announced itself with the most
               // reassuring word the SDK has. See [registrationLabel].
               Text(
-                  "Registration: ${registrationLabel(ui.glassesReg)}",
+                  "Meta DAT registration: ${registrationLabel(ui.glassesReg)}",
                   style = MaterialTheme.typography.bodySmall,
               )
               Text(
@@ -333,13 +342,18 @@ fun HomeScreen(
               )
             }
             s.capture?.let { CaptureThumbnail(it) }
-          } else if (ui.selectedMachine == null || !ui.machinesFetchOk) {
-            // Why Start is dead, said where Start is. The Machine card above is where you fix it, but
-            // it is a separate card now, so the reason has to travel with the disabled button.
+          } else if (!ui.machinesFetchOk) {
+            // Why the slot says "Load machines" rather than "Start call", and — when the last attempt
+            // actually failed — what went wrong, quoted from the Machine card so the two agree.
             Hint(
-                if (!ui.machinesFetchOk) "Load your machines before starting a call."
-                else "Pick a machine before starting a call.",
+                if (ui.machinesError != null) "Couldn't reach your machines. ${ui.machinesInfo}".trim()
+                else "Sai needs your machine list before it can start a call.",
+                detail =
+                    "The list comes from the Sai API, so this needs a working connection to it — on " +
+                        "staging that means the VPN. Nothing about the glasses matters yet.",
             )
+          } else if (ui.selectedMachine == null) {
+            Hint("Pick a machine in Machine above before starting a call.")
           } else {
             // One line, detail on demand. This was a four-sentence paragraph — the single biggest
             // contributor to the wall-of-grey-text look, and it sat directly under the button you
@@ -497,6 +511,24 @@ private fun CallControls(s: CallController.State, ui: VoiceConciergeActivity) {
         Spacer(Modifier.width(6.dp))
         Text("End call")
       }
+    } else if (!ui.machinesFetchOk) {
+      // Start needs a machine list, and until there is one this slot was a dead button — which is the
+      // single most common thing to be looking at on this screen, because the list fails whenever the
+      // staging VPN is off or the token won't mint. A greyed "Start call" reports that as "the app is
+      // broken".
+      //
+      // So the primary slot is never dead: it carries the action that is actually available. The
+      // sequence is "Load machines" → "Start call" → "End call", and there is always exactly one next
+      // thing to tap. The Machine card's own Reload does the same work; this is the copy of it that
+      // sits where you were already trying to press.
+      Button(
+          onClick = { ui.loadMachines() },
+          modifier = Modifier.weight(1f).height(48.dp),
+      ) {
+        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Load machines")
+      }
     } else {
       // The call's audio runs over the phone mic + Bluetooth (SCO to the glasses when available),
       // independent of the DAT session. So Start is NOT gated on the glasses — only on a selected
@@ -504,9 +536,11 @@ private fun CallControls(s: CallController.State, ui: VoiceConciergeActivity) {
       // warn about that rather than blocking.
       //
       // The `ui.signedIn` clause this used to carry is gone: behind the sign-in gate it is always
-      // true, so it only obscured the two conditions that can still fail.
+      // true, so it only obscured the two conditions that can still fail. `machinesFetchOk` is gone
+      // from here too — it is the branch above — so the only way this is disabled now is an empty
+      // machine list, which the hint below names and the card above fixes in one tap.
       Button(
-          enabled = ui.machinesFetchOk && ui.selectedMachine != null,
+          enabled = ui.selectedMachine != null,
           onClick = { ui.onStartClicked() },
           modifier = Modifier.weight(1f).height(48.dp),
       ) {
