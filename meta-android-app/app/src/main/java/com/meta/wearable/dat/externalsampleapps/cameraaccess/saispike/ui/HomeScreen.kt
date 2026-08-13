@@ -10,9 +10,8 @@
 //   Machine    — which computer does the work. A standing choice, changed rarely.
 //   Call        — everything you do to the call in front of you.
 //
-// The Call card's four controls are ALL present at all times; only their enablement changes. And its
-// primary slot (bottom-right) is never a dead button — it carries whatever the next available action
-// is: "Load machines" → "Start call" → "End call".
+// The Call card's four controls are ALL present at all times; only their enablement changes. Start and
+// End share the bottom-right slot, because they are the same decision in two states.
 
 // ── The state this reads ─────────────────────────────────────────────────────────────────────────
 // Everything comes off the Activity as Compose snapshot state, plus `s` (the service's call state)
@@ -41,7 +40,6 @@ import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -343,8 +341,8 @@ fun HomeScreen(
             }
             s.capture?.let { CaptureThumbnail(it) }
           } else if (!ui.machinesFetchOk) {
-            // Why the slot says "Load machines" rather than "Start call", and — when the last attempt
-            // actually failed — what went wrong, quoted from the Machine card so the two agree.
+            // Why Start is disabled, and — when the last attempt actually failed — what went wrong,
+            // quoted from the Machine card so the two cards agree rather than each telling half of it.
             Hint(
                 if (ui.machinesError != null) "Couldn't reach your machines. ${ui.machinesInfo}".trim()
                 else "Sai needs your machine list before it can start a call.",
@@ -511,36 +509,22 @@ private fun CallControls(s: CallController.State, ui: VoiceConciergeActivity) {
         Spacer(Modifier.width(6.dp))
         Text("End call")
       }
-    } else if (!ui.machinesFetchOk) {
-      // Start needs a machine list, and until there is one this slot was a dead button — which is the
-      // single most common thing to be looking at on this screen, because the list fails whenever the
-      // staging VPN is off or the token won't mint. A greyed "Start call" reports that as "the app is
-      // broken".
-      //
-      // So the primary slot is never dead: it carries the action that is actually available. The
-      // sequence is "Load machines" → "Start call" → "End call", and there is always exactly one next
-      // thing to tap. The Machine card's own Reload does the same work; this is the copy of it that
-      // sits where you were already trying to press.
-      Button(
-          onClick = { ui.loadMachines() },
-          modifier = Modifier.weight(1f).height(48.dp),
-      ) {
-        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
-        Text("Load machines")
-      }
     } else {
       // The call's audio runs over the phone mic + Bluetooth (SCO to the glasses when available),
-      // independent of the DAT session. So Start is NOT gated on the glasses — only on a selected
-      // machine. The temple button and camera capture do need a DAT-eligible device; the hints below
-      // warn about that rather than blocking.
+      // independent of the DAT session. So Start is NOT gated on the glasses — only on a loaded list
+      // and a selected machine. The temple button and camera capture do need a DAT-eligible device;
+      // the hints below warn about that rather than blocking.
+      //
+      // Disabled until the machines are loaded, and deliberately so: until then there is nothing to
+      // start a call against, and a live button would be a promise the app can't keep. The hint below
+      // says why, and the Machine card above is where it gets fixed. A "Load machines" button in this
+      // slot was tried and reverted — the list loads by itself, so that label only ever appears when
+      // something has already failed, which makes it a retry wearing the primary action's clothes.
       //
       // The `ui.signedIn` clause this used to carry is gone: behind the sign-in gate it is always
-      // true, so it only obscured the two conditions that can still fail. `machinesFetchOk` is gone
-      // from here too — it is the branch above — so the only way this is disabled now is an empty
-      // machine list, which the hint below names and the card above fixes in one tap.
+      // true, so it only obscured the two conditions that can still fail.
       Button(
-          enabled = ui.selectedMachine != null,
+          enabled = ui.machinesFetchOk && ui.selectedMachine != null,
           onClick = { ui.onStartClicked() },
           modifier = Modifier.weight(1f).height(48.dp),
       ) {
