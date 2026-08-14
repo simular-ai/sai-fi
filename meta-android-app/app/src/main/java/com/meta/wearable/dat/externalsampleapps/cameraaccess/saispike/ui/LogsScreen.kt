@@ -65,24 +65,12 @@ fun LogsScreen(s: CallController.State) {
   Column(modifier = Modifier.fillMaxSize()) {
     ScreenHeader("Logs", s)
     Column(
-        modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
+        modifier =
+            Modifier.weight(1f)
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      // Copy sits BELOW the rule, with the header above it. It is an action on the stream rather than
-      // part of the screen's identity, and having it up beside the title made the header the only one
-      // in the app with a button in it.
-      Row(
-          modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-          horizontalArrangement = Arrangement.End,
-      ) {
-        OutlinedButton(
-            border = saiEdge(),
-            enabled = copyText.isNotEmpty(),
-            onClick = { clipboard.setText(AnnotatedString(copyText)) },
-        ) {
-          Text("Copy")
-        }
-      }
       if (s.active) {
         var typed by remember { mutableStateOf("") }
         Row(
@@ -114,9 +102,12 @@ fun LogsScreen(s: CallController.State) {
         if (entries.isNotEmpty()) listState.animateScrollToItem(entries.lastIndex)
       }
       if (entries.isEmpty()) {
+        // Weighted even though it is one line, so the copy button below stays pinned to the bottom
+        // rather than riding up under the empty-state text.
         Text(
             "Transcript and logs appear here during a call.",
             style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
         )
       } else {
         LazyColumn(
@@ -138,6 +129,22 @@ fun LogsScreen(s: CallController.State) {
                   )
             }
           }
+        }
+      }
+      // At the BOTTOM, and named. It acts on everything above it, so it reads as the end of the
+      // stream rather than a header control — and the stream auto-scrolls to the newest line, so the
+      // bottom is where you already are when you decide to copy. "Copy logs" rather than "Copy"
+      // because nothing else on this screen says what a bare "Copy" would take.
+      Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+      ) {
+        OutlinedButton(
+            border = saiEdge(),
+            enabled = copyText.isNotEmpty(),
+            onClick = { clipboard.setText(AnnotatedString(copyText)) },
+        ) {
+          Text("Copy logs")
         }
       }
     }
