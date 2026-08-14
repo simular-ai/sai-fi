@@ -43,6 +43,13 @@ lsof -nP -iTCP:8080 -sTCP:LISTEN
 ps -o lstart=,command= -p <pid> | cut -c1-80
 ```
 
+> **Running the checks without billing the agent.** If you have cloud-api checked out, start it with
+> `SAI_AGENT_SANDBOX=true npm run dev` and point `concierge_url` at it. Every request still runs for
+> real — auth, session resolve, the message write, the whole SSE stream — but the agent is stood in
+> for, so no VM wakes and nothing is billed. Good for the checks that exercise the request path
+> (1, 2, 6 and the queue cases); useless for the ones that depend on what the agent actually *did*,
+> since the answers are canned. It is a local-only flag — a deployed cloud-api refuses it.
+
 > **`sai_version_tag` only means something against staging.** It pins the app to one server revision
 > via the `x-sai-version` header. Pointed at a local server it is inert — `/health` reports
 > `versionTag: default` — so blank it rather than wonder. Pointed at staging, set it to the revision
