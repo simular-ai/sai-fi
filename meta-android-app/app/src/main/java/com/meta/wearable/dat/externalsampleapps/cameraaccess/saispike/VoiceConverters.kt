@@ -27,7 +27,10 @@ fun agentEventToJson(e: AgentEvent): JSONObject =
       is AgentEvent.Complete ->
           JSONObject().put("type", "complete").apply { e.summary?.let { put("summary", it) } }
       is AgentEvent.Error -> JSONObject().put("type", "error").put("text", e.text)
-      is AgentEvent.Notice -> JSONObject().put("type", "notice").put("text", e.text)
+      is AgentEvent.Notice ->
+          JSONObject().put("type", "notice").put("text", e.text).apply {
+            e.kind?.let { put("kind", it) }
+          }
       is AgentEvent.ApprovalRequest ->
           JSONObject()
               .put("type", "approval-request")

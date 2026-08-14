@@ -231,7 +231,10 @@ fun parseAgentEvent(raw: String): AgentEvent? {
             failed = true,
         )
     // Delivery news, not work: a hibernated machine waking, an agent that is offline.
-    "data-status" -> data?.optString("text")?.takeIf { it.isNotEmpty() }?.let { AgentEvent.Notice(it) }
+    "data-status" ->
+        data?.optString("text")?.takeIf { it.isNotEmpty() }?.let {
+          AgentEvent.Notice(it, kind = data.optString("kind", "").takeIf { k -> k.isNotEmpty() })
+        }
     "start" -> AgentEvent.Status(AgentStatus.PROCESSING)
     "finish" -> AgentEvent.Complete()
     "error" ->

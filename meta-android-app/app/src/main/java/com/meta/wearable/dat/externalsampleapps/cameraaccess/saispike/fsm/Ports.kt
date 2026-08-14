@@ -89,7 +89,15 @@ sealed interface AgentEvent {
    * one thing that must be relayed before the task has produced anything at all. The voice channel's
    * reply used to be a no-op sink, so a woken VM meant a silent minute with no explanation.
    */
-  data class Notice(val text: String) : AgentEvent
+  data class Notice(
+      val text: String,
+      /**
+       * `stalled` — the agent never picked the task up. Kept apart from an ordinary delivery notice
+       * because the two need different WORDING: this one is about the user's machine, and a model
+       * told only the text describes itself as offline instead.
+       */
+      val kind: String? = null,
+  ) : AgentEvent
 }
 
 /**
