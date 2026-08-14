@@ -21,7 +21,6 @@
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.BuildConfig
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -73,11 +72,7 @@ object ConciergeClient {
               requestMethod = "GET"
               connectTimeout = 10_000
               readTimeout = 15_000
-              setRequestProperty("Authorization", "Bearer $bearerToken")
-              // Route to a specific PR's staging revision via the shared staging gateway.
-              if (BuildConfig.SAI_VERSION_TAG.isNotBlank()) {
-                setRequestProperty("x-sai-version", BuildConfig.SAI_VERSION_TAG)
-              }
+              applyCloudApiHeaders(bearerToken)
             }
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
@@ -113,11 +108,7 @@ object ConciergeClient {
                   requestMethod = "GET"
                   connectTimeout = 10_000
                   readTimeout = 15_000
-                  setRequestProperty("Authorization", "Bearer $bearerToken")
-              // Route to a specific PR's staging revision via the shared staging gateway.
-              if (BuildConfig.SAI_VERSION_TAG.isNotBlank()) {
-                setRequestProperty("x-sai-version", BuildConfig.SAI_VERSION_TAG)
-              }
+                  applyCloudApiHeaders(bearerToken)
                 }
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
@@ -159,11 +150,7 @@ object ConciergeClient {
               doOutput = true
               connectTimeout = 10_000
               readTimeout = 30_000
-              setRequestProperty("Authorization", "Bearer $bearerToken")
-              // Route to a specific PR's staging revision via the shared staging gateway.
-              if (BuildConfig.SAI_VERSION_TAG.isNotBlank()) {
-                setRequestProperty("x-sai-version", BuildConfig.SAI_VERSION_TAG)
-              }
+              applyCloudApiHeaders(bearerToken)
               setRequestProperty("Content-Type", "application/octet-stream")
               setRequestProperty("x-filename", filename)
             }

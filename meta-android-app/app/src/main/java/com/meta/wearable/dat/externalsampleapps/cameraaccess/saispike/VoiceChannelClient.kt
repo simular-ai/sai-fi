@@ -74,7 +74,7 @@ object VoiceChannelClient {
 
         val conn = (URL("$baseUrl/v1/agents/message").openConnection() as HttpURLConnection)
         conn.requestMethod = "POST"
-        conn.setRequestProperty("Authorization", "Bearer $bearerToken")
+        conn.applyCloudApiHeaders(bearerToken)
         conn.setRequestProperty("Content-Type", "application/json")
         conn.setRequestProperty("Accept", "text/event-stream")
         conn.doOutput = true
@@ -147,7 +147,7 @@ object VoiceChannelClient {
       withContext(Dispatchers.IO) {
         val conn = (URL("$baseUrl/v1/agents/$path").openConnection() as HttpURLConnection)
         conn.requestMethod = "POST"
-        conn.setRequestProperty("Authorization", "Bearer $bearerToken")
+        conn.applyCloudApiHeaders(bearerToken)
         conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
         conn.connectTimeout = 15_000
