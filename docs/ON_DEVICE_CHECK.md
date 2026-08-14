@@ -43,6 +43,13 @@ lsof -nP -iTCP:8080 -sTCP:LISTEN
 ps -o lstart=,command= -p <pid> | cut -c1-80
 ```
 
+> **Running the checks without billing the agent.** If you have cloud-api checked out, start it with
+> `SAI_AGENT_SANDBOX=true npm run dev` and point `concierge_url` at it. Every request still runs for
+> real — auth, session resolve, the message write, the whole SSE stream — but the agent is stood in
+> for, so no VM wakes and nothing is billed. Good for the checks that exercise the request path
+> (1, 2, 6 and the queue cases); useless for the ones that depend on what the agent actually *did*,
+> since the answers are canned. It is a local-only flag — a deployed cloud-api refuses it.
+
 > **`sai_version_tag` only means something against staging.** It pins the app to one server revision
 > via the `x-sai-version` header. Pointed at a local server it is inert — `/health` reports
 > `versionTag: default` — so blank it rather than wonder. Pointed at staging, set it to the revision
@@ -59,14 +66,20 @@ adb devices          # your phone should be listed
 ### The glasses
 
 1. Meta AI app → **Developer Mode ON**, glasses paired and connected.
-2. Launch **sai-fi**, sign in with Google.
-3. Register with Meta AI when prompted. Remember: **only one third-party DAT app can be registered at
-   a time** — this unregisters whatever else you had, and you will want to put that back afterwards.
-4. Pick your machine. Start the call.
+2. Launch **sai-fi**. Signed out, the only thing on screen is *Sign in with Google* — that is the
+   gate, not a stuck screen. Sign in.
+3. Register with Meta AI when prompted (Home → **Register glasses**). Remember: **only one third-party
+   DAT app can be registered at a time** — this unregisters whatever else you had, and you will want to
+   put that back afterwards.
+4. **Settings → Developer mode ON.** This is sai-fi's own switch, not Meta's, and it is off by default
+   in every build including debug. Without it there is no Logs tab, so the in-app transcript and the
+   text composer several checks below rely on are not there. It persists, so this is a once-per-install
+   step.
+5. Home: pick your machine, then Start the call.
 
 ### Watch it happen
 
-Two windows, both worth having:
+Three windows, all worth having — the Logs tab from step 4, plus:
 
 ```bash
 adb logcat -c && adb logcat | grep -E 'SaiFi:'      # Live, Audio, Concierge, Presenter, WindowCapture

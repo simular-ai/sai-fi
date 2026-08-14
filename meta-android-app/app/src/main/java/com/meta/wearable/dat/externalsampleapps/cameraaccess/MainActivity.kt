@@ -25,12 +25,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.VoiceConciergeActivity
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui.theme.SaiTheme
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,7 +38,11 @@ class MainActivity : ComponentActivity() {
     runCatching { Wearables.initialize(this) } // idempotent — SaiFiApp already initialized at startup
     enableEdgeToEdge()
     setContent {
-      MaterialTheme(colorScheme = darkColorScheme()) {
+      // SaiTheme, not a bare `darkColorScheme()` — that was the stock Material baseline (Google's
+      // purple) and it made the one screen the Meta AI app bounces you through the only screen in the
+      // app that isn't Sai's. It is also always-dark, so on a light-mode phone this flashed black
+      // between two light screens.
+      SaiTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
           Column(
               modifier = Modifier.fillMaxSize().padding(24.dp),
