@@ -107,7 +107,11 @@ object ConciergeClient {
   ): String =
       withContext(Dispatchers.IO) {
         val conn =
-            (URL("$baseUrl/v1/agents/context?machineId=$machineId&limit=$limit").openConnection()
+            // `channel=api` for the same reason the rotation names it: the route defaults to
+            // `cli`, so recall without it answers from the TERMINAL's transcript — a conversation
+            // this client has never taken part in.
+            (URL("$baseUrl/v1/agents/context?machineId=$machineId&limit=$limit&channel=api")
+                    .openConnection()
                     as HttpURLConnection)
                 .apply {
                   requestMethod = "GET"

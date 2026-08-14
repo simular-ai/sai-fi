@@ -147,7 +147,12 @@ class VoiceSession(
     scope.async {
       runCatching {
             VoiceChannelClient.postOperation(
-                baseUrl, token(), "new-session", JSONObject().put("machineId", machineId))
+                baseUrl,
+                token(),
+                "new-session",
+                // `channel` is required, not cosmetic: the route defaults to `cli`, so omitting it
+                // rotates the TERMINAL's conversation and leaves this one exactly where it was.
+                JSONObject().put("machineId", machineId).put("channel", "api"))
           }
           .onFailure {
             onLog("[voice] kept the previous session — could not start a fresh one (${it.message})")
