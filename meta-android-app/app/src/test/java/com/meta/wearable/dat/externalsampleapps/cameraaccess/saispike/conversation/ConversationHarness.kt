@@ -60,8 +60,15 @@ class ConversationHarness(
 ) {
   val log = mutableListOf<String>()
 
+  /**
+   * Mirrors this conversation to the presenter when `SAI_PRESENTER=1`, so a test can be watched in
+   * the same browser view a real call uses. Null — and free — otherwise.
+   */
+  private val presenter = PresenterPublisher.fromEnvOrNull()
+
   private fun log(line: String) {
     log += line
+    presenter?.log(line)
   }
 
   val gate = LiveTurnGate { clock.now }
@@ -148,6 +155,8 @@ class ConversationHarness(
 
   /** Bring the Live session up. */
   suspend fun start() {
+    presenter?.hello("harness")
+    presenter?.state(active = true, status = "in a call", machine = "harness", muted = false)
     runGate(gate.onConnect())
     runGate(gate.onSetupComplete())
   }
@@ -156,6 +165,7 @@ class ConversationHarness(
   suspend fun user(utterance: String) {
     lastUserSpeechAt = clock.now
     transcript += Line("you", utterance)
+    presenter?.turn("you", utterance)
     gate.onUserTranscript(utterance)
     modelTurn(utterance)
   }
@@ -168,6 +178,7 @@ class ConversationHarness(
    */
   suspend fun bargeIn(utterance: String) {
     runGate(gate.onInterrupted())
+    presenter?.interrupted()
     log("— barge-in —")
     user(utterance)
   }
@@ -175,6 +186,7 @@ class ConversationHarness(
   /** Mute / unmute, which on the device is the temple button or the on-screen control. */
   suspend fun setMuted(value: Boolean) {
     muted = value
+    presenter?.state(active = true, status = if (value) "muted" else "in a call", machine = "harness", muted = value)
     if (value) {
       runGate(gate.injectSessionState("muted", "[system] you are muted", sticky = true))
     } else {
@@ -210,6 +222,7 @@ class ConversationHarness(
     if (!turn.speech.isNullOrBlank()) {
       runGate(gate.onSaiTranscript(turn.speech))
       transcript += Line("sai", turn.speech)
+      presenter?.turn("sai", turn.speech)
     }
     routeCalls(turn.calls)
     // The turn ends after the model has finished speaking, not instantly: the gap is the window in

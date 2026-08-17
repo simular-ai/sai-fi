@@ -236,6 +236,17 @@ const val GREETING_NUDGE =
  * the list for the same reason.
  */
 fun isPlaceholderSpeech(text: String): Boolean {
+  val whole = text.trim()
+  // A turn that is ENTIRELY bracketed is a stage direction, not speech. Seen on a real call: told to
+  // stay quiet by the ask-first nudge, the model answered with the literal token "[silence]" — twice
+  // in one call. Structural rather than another word in the list below, because the shape is the tell
+  // and the vocabulary inside it is unbounded ("[no response]", "[pause]", "(staying silent)", which
+  // is the rubric's own fail example). Nobody speaks a sentence that is wholly inside brackets.
+  if (whole.length > 1 &&
+      ((whole.startsWith("[") && whole.endsWith("]")) ||
+          (whole.startsWith("(") && whole.endsWith(")")))) {
+    return true
+  }
   val bare = text.trim().trim('.', '!', '?', ',', ';', ':', '"', '\'', '(', ')', '[', ']').trim()
   // A turn with no letter and no digit anywhere in it is not speech, whatever its characters are.
   // The named list below is a vocabulary, so it can only ever catch fillers we have already met —

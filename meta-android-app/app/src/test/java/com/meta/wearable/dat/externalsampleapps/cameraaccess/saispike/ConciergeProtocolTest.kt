@@ -118,6 +118,10 @@ class ConciergeProtocolTest {
             "_",
             "—",
             "***",
+            // Seen on a real call, twice, both times after a nudge asked Sai to stay quiet.
+            "[silence]",
+            "[no response]",
+            "(staying silent)",
         )
         .forEach { assertTrue("should be a placeholder: $it", isPlaceholderSpeech(it)) }
     listOf(
