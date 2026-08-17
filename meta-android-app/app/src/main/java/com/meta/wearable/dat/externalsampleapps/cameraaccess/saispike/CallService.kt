@@ -118,6 +118,14 @@ class CallService : Service() {
    */
   @Volatile private var lastUserSpeechAt = 0L
   /**
+   * When a task was last handed to the agent (elapsedRealtime), 0 if none this call.
+   *
+   * Only here to be SUBTRACTED from the quiet clock. While a task runs the user has no reason to
+   * speak, so counting that stretch as absence made every task longer than the ask-first threshold
+   * report itself as "the user has gone away" — see the gate in onAgentEvent.
+   */
+  @Volatile private var lastTaskForwardAt = 0L
+  /**
    * The last thing each side actually said, and when Sai last said anything — the evidence an
    * `endCall` needs to be judged by.
    *
@@ -210,6 +218,7 @@ class CallService : Service() {
     heldNudges.clear()
     lastKeepaliveMs = 0L
     lastUserSpeechAt = 0L
+    lastTaskForwardAt = 0L
     lastSaiSpeechAt = 0L
     lastUserText = ""
     lastSaiText = ""
@@ -896,8 +905,17 @@ class CallService : Service() {
                   AgentEventRouter.route(
                       event = json,
                       muted = saiMuted,
+                      // Quiet measured up to the moment the task went out, never past it. A user
+                      // who asked for something and is waiting for it is silent for exactly as long
+                      // as the task takes, and reading that as absence is what silenced a finished
+                      // answer they were sitting there waiting to hear.
                       userQuietMs =
-                          if (lastUserSpeechAt == 0L) Long.MAX_VALUE else now - lastUserSpeechAt,
+                          when {
+                            lastUserSpeechAt == 0L -> Long.MAX_VALUE
+                            lastTaskForwardAt > lastUserSpeechAt ->
+                                lastTaskForwardAt - lastUserSpeechAt
+                            else -> now - lastUserSpeechAt
+                          },
                       askFirstThresholdMs = params?.askFirstThresholdMs ?: DEFAULT_ASK_FIRST_MS,
                       sinceLastStepFailureMs =
                           if (lastStepFailureNudgeAt == 0L) Long.MAX_VALUE
@@ -1147,9 +1165,17 @@ class CallService : Service() {
     // reason, so the pair is emitted atomically once the fix is in hand.
     scope.launch {
       val fix = PhoneLocation.current(applicationContext, ::log)
+      if (hasMessageEffect(effects)) lastTaskForwardAt = SystemClock.elapsedRealtime()
       sendEffectsNow(effects, wantsPhoto, fix)
     }
   }
+
+  /** Does this batch actually hand something to the agent? (vs. speech-only effects.) */
+  private fun hasMessageEffect(effects: JSONArray): Boolean =
+      (0 until effects.length()).any { i ->
+        val kind = effects.optJSONObject(i)?.optString("kind")
+        kind == "forwardToAgent" || kind == "relayToAgent"
+      }
 
   private fun anyMessageEffectHasFlag(effects: JSONArray, flag: String): Boolean =
       (0 until effects.length()).any { i ->
