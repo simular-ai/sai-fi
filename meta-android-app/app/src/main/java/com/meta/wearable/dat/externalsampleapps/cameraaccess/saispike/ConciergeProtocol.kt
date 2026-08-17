@@ -237,6 +237,12 @@ const val GREETING_NUDGE =
  */
 fun isPlaceholderSpeech(text: String): Boolean {
   val bare = text.trim().trim('.', '!', '?', ',', ';', ':', '"', '\'', '(', ')', '[', ']').trim()
+  // A turn with no letter and no digit anywhere in it is not speech, whatever its characters are.
+  // The named list below is a vocabulary, so it can only ever catch fillers we have already met —
+  // and the eval turned up a turn that was a bare "_" where the model had been told to say nothing,
+  // which is the same failure wearing a character nobody thought to add. Anything a person could
+  // actually hear has a letter or a digit in it, so this cannot swallow real speech.
+  if (bare.isNotEmpty() && bare.none { it.isLetterOrDigit() }) return true
   return bare.lowercase() in PLACEHOLDER_SPEECH
 }
 

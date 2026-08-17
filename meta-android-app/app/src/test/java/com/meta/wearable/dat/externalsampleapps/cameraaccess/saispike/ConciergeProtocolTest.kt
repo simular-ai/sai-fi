@@ -113,6 +113,11 @@ class ConciergeProtocolTest {
             "null",
             " Empty ",
             "\"No response received.\"",
+            // Turned up by the eval: told to say nothing, the model emitted a bare underscore. A
+            // vocabulary could never have caught that, which is why the rule is now structural.
+            "_",
+            "—",
+            "***",
         )
         .forEach { assertTrue("should be a placeholder: $it", isPlaceholderSpeech(it)) }
     listOf(
