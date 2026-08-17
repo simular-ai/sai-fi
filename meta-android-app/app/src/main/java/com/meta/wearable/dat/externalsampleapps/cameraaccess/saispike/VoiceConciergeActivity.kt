@@ -773,7 +773,23 @@ class VoiceConciergeActivity : ComponentActivity() {
       if (token == null) {
         machines.clear()
         selectedMachine = null
-        machinesInfo = "Sign in to load machines"
+        // A null token means one of two different things, and they need different sentences. If
+        // `currentUser` is gone the session really is over and "sign in" is the answer. If it is
+        // there, the user IS signed in and the token *refresh* is what failed — offline, no VPN, or
+        // a revoked refresh token — and telling them to sign in sends them looking for a button the
+        // signed-in UI doesn't show. Same distinction `startServiceNow` already makes.
+        if (SaiAuth.isSignedIn()) {
+          showMachinesError(
+              "Couldn't refresh your sign-in token, so the machine list can't load.\n" +
+                  "You are still signed in — this is the token refresh failing, not the session. " +
+                  "Check the connection (on staging that means the VPN) and hit Reload; if it keeps " +
+                  "failing, sign out in Settings and sign in again.",
+              "Sign-in token refresh failed",
+          )
+        } else {
+          refreshAuthState() // the session is actually gone — let the UI show the sign-in screen
+          machinesInfo = "Sign in to load machines"
+        }
         return@launch
       }
       try {

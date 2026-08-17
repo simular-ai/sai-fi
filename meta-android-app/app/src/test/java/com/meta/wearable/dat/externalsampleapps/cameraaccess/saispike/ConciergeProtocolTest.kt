@@ -122,11 +122,16 @@ class ConciergeProtocolTest {
             "[silence]",
             "[no response]",
             "(staying silent)",
+            // Also seen where an empty turn belonged.
+            "/index.html",
+            "https://example.com/x",
         )
         .forEach { assertTrue("should be a placeholder: $it", isPlaceholderSpeech(it)) }
     listOf(
             "None.", // a legitimate answer to "how many are there?"
-            "N/A",
+            "N/A", // a slash mid-word is speech; only a whole turn that IS a path is not
+            "The file is at /etc/hosts if you need it.", // a path inside a sentence stays
+            "Half and half, roughly 50/50.",
             "No response received from the server, so I'll try again.",
             "Empty-handed, sorry — the capture failed.",
             "Nothing came back yet.",

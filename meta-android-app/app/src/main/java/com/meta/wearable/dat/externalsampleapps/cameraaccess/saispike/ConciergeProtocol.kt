@@ -247,6 +247,16 @@ fun isPlaceholderSpeech(text: String): Boolean {
           (whole.startsWith("(") && whole.endsWith(")")))) {
     return true
   }
+  // A whole turn that is one bare path or URL is not speech either — the eval caught "/index.html"
+  // produced where the model had been told to say nothing. Deliberately narrow: it must be the ENTIRE
+  // turn, with no spaces, and start with a slash or carry a scheme. "N/A" is speech and must stay
+  // speech, which is why this keys on the leading slash rather than on the character appearing
+  // anywhere.
+  if (whole.isNotEmpty() &&
+      whole.none { it.isWhitespace() } &&
+      (whole.startsWith("/") || whole.startsWith("\\") || whole.contains("://"))) {
+    return true
+  }
   val bare = text.trim().trim('.', '!', '?', ',', ';', ':', '"', '\'', '(', ')', '[', ']').trim()
   // A turn with no letter and no digit anywhere in it is not speech, whatever its characters are.
   // The named list below is a vocabulary, so it can only ever catch fillers we have already met —
