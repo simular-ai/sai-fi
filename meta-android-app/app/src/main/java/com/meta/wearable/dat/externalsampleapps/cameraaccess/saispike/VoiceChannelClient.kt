@@ -113,21 +113,22 @@ object VoiceChannelClient {
      */
     suspend fun read(onEvent: suspend (AgentEvent) -> Unit, onLog: (String) -> Unit = {}) =
         withContext(Dispatchers.IO) {
+          val turn = TurnEvents()
           try {
             conn.inputStream.bufferedReader().use { reader ->
               readSseLines(reader) { payload ->
-                val event = parseAgentEvent(payload)
-                if (event == null) {
-                  // NAME it. Most unmapped frames are envelope markers this client is right to
-                  // ignore, but a frame the server started sending and this client never learned
-                  // looks identical from here — and an anonymous "dropped something" line cannot
-                  // tell the two apart. The live-agent contract test reads these lines, so the name
-                  // is the evidence it works from.
-                  val type =
-                      runCatching { JSONObject(payload).optString("type") }.getOrNull().orEmpty()
-                  onLog("[voice] ignored frame: ${type.ifEmpty { "(untyped)" }}")
-                } else {
-                  onEvent(event)
+                when (val out = turn.onPayload(payload)) {
+                  null -> {
+                    // NAME it. Most unmapped frames are envelope markers this client is right to
+                    // ignore, but a frame the server started sending and this client never learned
+                    // looks identical from here — and an anonymous "dropped something" line cannot
+                    // tell the two apart. The live-agent contract test reads these lines, so the
+                    // name is the evidence it works from.
+                    val type =
+                        runCatching { JSONObject(payload).optString("type") }.getOrNull().orEmpty()
+                    onLog("[voice] ignored frame: ${type.ifEmpty { "(untyped)" }}")
+                  }
+                  else -> onEvent(out)
                 }
               }
             }
@@ -219,6 +220,48 @@ private suspend fun readSseLines(reader: BufferedReader, onPayload: suspend (Str
  * Tolerant reads throughout (`opt*`): a field added server-side must not break a client that
  * predates it.
  */
+/**
+ * One turn's frames, in order — and the one piece of state reading them requires.
+ *
+ * `parseAgentEvent` is stateless and has to stay that way, but a turn is not: the agent's ANSWER
+ * arrives as a run of `text-delta` frames and the turn then ends with a bare
+ * `{"type":"finish","finishReason":"stop"}` that carries nothing. Mapping that straight through
+ * produced `Complete(summary = null)`, whose nudge tells the concierge:
+ *
+ *   "The task ended WITHOUT reporting any result. You have no answer and nothing to relay. …
+ *    Tell the user plainly that nothing came back."
+ *
+ * — on every task that answered perfectly well. Caught on a live call: the agent replied with the
+ * time and the user was never told it. Nothing anywhere built a `Complete` WITH a summary, so this
+ * was every completion, not an edge case.
+ *
+ * So the deltas are accumulated here and handed over on `finish`. They are still emitted
+ * individually as they arrive — the activity log and the presenter transcript are built from them,
+ * and `getSaiStatus` reads that log, which is the only reason the answer was reachable at all
+ * before. An empty accumulation still means an empty summary, because a turn that really said
+ * nothing should still report that it said nothing.
+ */
+class TurnEvents {
+  private val answer = StringBuilder()
+
+  /** The event this frame becomes, or null when the frame is one we ignore. */
+  fun onPayload(raw: String): AgentEvent? {
+    val event = parseAgentEvent(raw) ?: return null
+    return when (event) {
+      is AgentEvent.Text -> {
+        answer.append(event.text)
+        event
+      }
+      // Only fill in a summary the server did not send; never overwrite one it did.
+      is AgentEvent.Complete ->
+          if (event.summary.isNullOrEmpty() && answer.isNotBlank())
+              AgentEvent.Complete(answer.toString().trim())
+          else event
+      else -> event
+    }
+  }
+}
+
 fun parseAgentEvent(raw: String): AgentEvent? {
   val json = runCatching { JSONObject(raw) }.getOrNull() ?: return null
   val data = json.optJSONObject("data")

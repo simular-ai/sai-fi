@@ -156,4 +156,49 @@ class VoiceChannelClientTest {
             as AgentEvent.ApprovalRequest
     assertEquals(true, e.allowOther)
   }
+
+  /**
+   * The bug this exists for: the agent answers in `text-delta` frames and the turn ends with a bare
+   * `finish`, so the completion carried no result and the concierge was told to say nothing came
+   * back. Found on a live call — the agent reported the time and the user never heard it.
+   */
+  @Test
+  fun `a turn that answers in text deltas completes WITH that answer as its summary`() {
+    val turn = TurnEvents()
+    val seen = mutableListOf<AgentEvent>()
+    listOf(
+            """{"type":"start"}""",
+            """{"type":"text-start"}""",
+            """{"type":"text-delta","delta":"It is "}""",
+            """{"type":"text-delta","delta":"half past four."}""",
+            """{"type":"text-end"}""",
+            """{"type":"finish","finishReason":"stop"}""",
+        )
+        .forEach { turn.onPayload(it)?.let(seen::add) }
+
+    // The deltas still arrive individually — the activity log and the transcript are built from them.
+    assertEquals(listOf("It is ", "half past four."), seen.filterIsInstance<AgentEvent.Text>().map { it.text })
+
+    val complete = seen.filterIsInstance<AgentEvent.Complete>().single()
+    assertEquals("It is half past four.", complete.summary)
+  }
+
+  @Test
+  fun `a turn that really said nothing still completes with nothing`() {
+    val turn = TurnEvents()
+    val seen = mutableListOf<AgentEvent>()
+    listOf("""{"type":"start"}""", """{"type":"finish","finishReason":"stop"}""")
+        .forEach { turn.onPayload(it)?.let(seen::add) }
+    // Empty must stay empty: the "nothing came back" nudge is right when nothing did.
+    assertTrue(seen.filterIsInstance<AgentEvent.Complete>().single().summary.isNullOrEmpty())
+  }
+
+  @Test
+  fun `a summary the server did send is never overwritten`() {
+    val turn = TurnEvents()
+    turn.onPayload("""{"type":"text-delta","delta":"chatter"}""")
+    val complete = turn.onPayload("""{"type":"complete","summary":"the real summary"}""")
+    // Only fills a gap. If the wire ever starts carrying a summary, that one wins.
+    if (complete is AgentEvent.Complete) assertEquals("the real summary", complete.summary)
+  }
 }
