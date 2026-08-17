@@ -35,6 +35,7 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.HttpAgentB
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.LiveTurnGate
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.LiveVoiceChannel
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.NudgeAction
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.VoiceTransport
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.TaskRouting
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.agentEventToJson
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ClientBrain
@@ -82,7 +83,46 @@ class ConversationHarness(
   private var lastTaskForwardAt = 0L
   private var lastStepFailureNudgeAt = 0L
 
-  private val bridge = HttpAgentBridge("M-harness", agent, ::log)
+  /**
+   * Swapped for a [LiveAgent] when the contract tier runs.
+   *
+   * Indirected through a delegate rather than taken as a constructor argument because the scripted
+   * agent needs the harness (to deliver events) and the harness needs the transport (to build the
+   * bridge) — a cycle that a settable field breaks without making every scenario declare a transport
+   * it does not care about.
+   */
+  private var transport: VoiceTransport? = null
+
+  /** Send this run's traffic to [replacement] instead of the scripted agent. Call before [start]. */
+  fun useTransport(replacement: VoiceTransport) {
+    transport = replacement
+  }
+
+  private val bridge =
+      HttpAgentBridge(
+          "M-harness",
+          object : VoiceTransport {
+            override suspend fun sendMessage(
+                machineId: String,
+                message: String,
+                attachments: JSONArray?,
+                follow: Boolean,
+            ) = (transport ?: agent).sendMessage(machineId, message, attachments, follow)
+
+            override suspend fun post(path: String, body: JSONObject): JSONObject =
+                (transport ?: agent).post(path, body)
+          },
+          ::log,
+      )
+
+  /**
+   * Hand an agent event to the client, as the turn-stream reader does.
+   *
+   * Public so a live transport, whose events arrive on its own reader rather than on the clock, can
+   * put them through the same path the scripted one uses — the FSM, then the activity log, then the
+   * nudge routing.
+   */
+  suspend fun deliverAgentEvent(event: AgentEvent) = onAgentEvent(event)
 
   val concierge =
       Concierge(

@@ -191,6 +191,11 @@ tasks.withType<Test>().configureEach {
           "JUDGE_MODEL",
           "EVAL_ONLY",
           "EVAL_PRINT",
+          // The live-agent contract tier, which talks to a real cloud-api and bills a real agent.
+          "SAI_LIVE_AGENT",
+          "SAI_CONCIERGE_URL",
+          "SAI_MACHINE_ID",
+          "SAI_ID_TOKEN",
       )
       .forEach { name -> System.getenv(name)?.let { environment(name, it) } }
   // The eval's output IS its result — a scorecard, not an assertion count — so it has to reach the
