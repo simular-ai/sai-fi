@@ -117,7 +117,18 @@ object VoiceChannelClient {
             conn.inputStream.bufferedReader().use { reader ->
               readSseLines(reader) { payload ->
                 val event = parseAgentEvent(payload)
-                if (event == null) onLog("[voice] dropped an unrecognised frame") else onEvent(event)
+                if (event == null) {
+                  // NAME it. Most unmapped frames are envelope markers this client is right to
+                  // ignore, but a frame the server started sending and this client never learned
+                  // looks identical from here — and an anonymous "dropped something" line cannot
+                  // tell the two apart. The live-agent contract test reads these lines, so the name
+                  // is the evidence it works from.
+                  val type =
+                      runCatching { JSONObject(payload).optString("type") }.getOrNull().orEmpty()
+                  onLog("[voice] ignored frame: ${type.ifEmpty { "(untyped)" }}")
+                } else {
+                  onEvent(event)
+                }
               }
             }
           } finally {
