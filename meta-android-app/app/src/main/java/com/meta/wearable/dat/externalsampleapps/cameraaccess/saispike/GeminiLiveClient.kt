@@ -76,57 +76,30 @@ class GeminiLiveClient(
     /** Socket closed or failed — the caller tears down the call or reconnects. */
     private val onClosed: () -> Unit,
 ) {
-  // Nudge gating: server-pushed nudges make the model talk; firing one mid-utterance cuts it off, so
-  // defer until the turn ends (or drop it, for a low-value nudge the caller marks dropIfBusy).
-  @Volatile private var modelSpeaking = false
-  // A glasses capture is running. Task-starting effects are held for its duration — not just within
-  // the batch that triggered it, since the model can now speak first and forward a beat later.
-  @Volatile private var captureInFlight = false
-  // Whether the CURRENT capture's outcome has already been relayed to the model (see the coalescing
-  // note in handleToolCall — several tool calls can share one capture and one result).
-  private val outcomeNudged = java.util.concurrent.atomic.AtomicBoolean(false)
-  // Did this turn hear the user, and did Sai answer? A turn with the first and not the second is Sai
-  // correctly ignoring speech that wasn't for it — worth a log line, since silence otherwise reads
-  // as a fault. Reset at each turn boundary.
-  @Volatile private var heardUserSinceLastTurn = false
-  @Volatile private var spokeThisTurn = false
   /**
-   * Sai's transcript for the CURRENT turn, and whatever of it we are withholding.
+   * The turn/nudge state machine — what this session does with a nudge, a tool call and a turn
+   * boundary. It lives in [LiveTurnGate] rather than here because it is the part worth testing and
+   * this class is untestable: a WebSocket, an `android.util.Base64` and an `android.util.Log`.
    *
-   * A turn whose entire text is a mechanical placeholder ("Empty-Response", "No response received.")
-   * is not speech — see [isPlaceholderSpeech]. Deltas arrive in fragments, so the test has to run
-   * against the accumulated turn rather than each delta: `Empty-` on its own matches nothing. What is
-   * withheld is kept, so a turn that STARTS placeholder-shaped and then turns into real speech is
-   * released in full instead of losing its opening words.
-   *
-   * Plain @Volatile Strings rather than StringBuilders: deltas are appended on the Live reader thread
-   * while `connect()` clears them from the main thread, and an immutable value swapped atomically can't
-   * be read half-written. Deltas are a few words, so the copying is irrelevant.
+   * The gate performs no I/O. It returns [GateAction]s and [run] is the interpreter — so the ordering
+   * between a log line and the turn it describes is explicit rather than incidental.
    */
-  @Volatile private var saiTurn = ""
-  @Volatile private var withheld = ""
-  /** A nudge in this turn explicitly asked Sai not to speak, so silence here is instructed, not judged. */
-  @Volatile private var silenceWasRequested = false
-  private val heldTaskEffects = mutableListOf<JSONObject>()
-  private val heldTaskNames = mutableListOf<String>()
-  // Set on barge-in: ignore audio of the interrupted turn that is still arriving (see handleServerContent).
-  @Volatile private var discardAudioUntil = 0L
-  // Deferred nudges keep their kind alongside the body, so the log can name what was held.
-  private val deferredNudges = mutableListOf<Pair<String, String>>()
-  // Nudges injected before setupComplete, replayed the moment it lands. Distinct from
-  // deferredNudges (which waits on a TURN ending, not on the session existing): a call can be muted
-  // in the second before it connects, and that state has to survive the wait.
-  private val preConnectNudges = mutableListOf<Pair<String, String>>()
-  /**
-   * A nudge describing session-level STATE rather than an event — mute is the only one. Every fresh
-   * Live session (initial connect, token-expiry reconnect, resume-after-pause) starts knowing nothing,
-   * so this is re-asserted at each setupComplete and needs no pre-connect buffering: being told at
-   * setup IS the delivery. Null when there is no such state to carry.
-   */
-  @Volatile private var sessionState: Pair<String, String>? = null
-  // setupComplete has landed on the CURRENT socket, so a client turn is deliverable. Cleared on
-  // connect() and close(): a nudge injected between them would be sent ahead of the setup frame.
-  @Volatile private var ready = false
+  private val gate = LiveTurnGate()
+
+  /** Perform what the gate decided, in order. */
+  private fun run(actions: List<GateAction>) {
+    for (action in actions) {
+      when (action) {
+        is GateAction.SendTurn -> sendClientTurn(action.text)
+        is GateAction.Log -> onLog(action.text)
+        is GateAction.SaiTranscript -> onTranscript("sai", action.text)
+        is GateAction.UserTranscript -> onTranscript("you", action.text)
+        is GateAction.TurnComplete -> onTurnComplete()
+        is GateAction.FlushPlayback -> onInterrupted()
+        is GateAction.ReleaseEffects -> onEffects(action.effects)
+      }
+    }
+  }
 
   private val client =
       OkHttpClient.Builder().pingInterval(20, java.util.concurrent.TimeUnit.SECONDS).build()
@@ -142,22 +115,7 @@ class GeminiLiveClient(
             "google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent" +
             "?key=$apiKey"
     // Fresh session ⇒ fresh turn state (also correct on a reconnect: the old turn is gone).
-    modelSpeaking = false
-    ready = false
-    discardAudioUntil = 0L
-    saiTurn = ""
-    withheld = ""
-    synchronized(deferredNudges) {
-      // Say what is being thrown away. A nudge held for a turn that never ended (a barge-in, then a
-      // token-expiry reconnect) died here without a trace, which is one candidate cause for a
-      // completion the user never heard.
-      if (deferredNudges.isNotEmpty()) {
-        onLog("✗ nudge: dropping ${deferredNudges.joinToString(", ") { it.first }} — session replaced")
-      }
-      deferredNudges.clear()
-    }
-    // preConnectNudges deliberately SURVIVES a reconnect: it holds session-level state (mute) that a
-    // fresh Live session needs re-asserted anyway, and the reconnect is exactly when it's re-injected.
+    run(gate.onConnect())
     runCatching { ws?.cancel() } // drop any prior socket before replacing it (reconnect path)
     ws = client.newWebSocket(Request.Builder().url(url).build(), Listener(boot))
   }
@@ -209,7 +167,7 @@ class GeminiLiveClient(
   }
 
   fun close() {
-    ready = false
+    gate.onClose()
     ws?.close(1000, null)
     ws = null
   }
@@ -250,13 +208,11 @@ class GeminiLiveClient(
     }
     when {
       json.has("setupComplete") -> {
-        ready = true // client turns are deliverable from here (see injectNudge)
-        onLog("live: setup complete — start talking")
-        // BEFORE onReady: the greeting is injected from there, and a mute asserted while connecting
-        // has to reach the model first — otherwise Sai is told to greet, then told to be silent, and
-        // obeys the last thing it read. State first, then anything that was waiting on the session.
-        sessionState?.let { injectNudge("${it.first} (re-asserted for this session)", it.second) }
-        flushPreConnectNudges()
+        // The gate re-asserts session state and flushes pre-connect nudges BEFORE onReady: the
+        // greeting is injected from there, and a mute asserted while connecting has to reach the
+        // model first — otherwise Sai is told to greet, then told to be silent, and obeys the last
+        // thing it read. State first, then anything that was waiting on the session.
+        run(gate.onSetupComplete())
         onReady()
       }
       json.has("serverContent") -> handleServerContent(json.getJSONObject("serverContent"))
@@ -266,95 +222,33 @@ class GeminiLiveClient(
   }
 
   private fun handleServerContent(sc: JSONObject) {
-    if (sc.optBoolean("interrupted", false)) {
-      modelSpeaking = false
-      // Flushing the track only empties what's already queued. Audio chunks of the interrupted turn
-      // that were ALREADY in flight keep arriving in the next few messages, get written, and refill
-      // it — so Sai talked straight through the barge-in even though the interrupt fired. Drop the
-      // stragglers for a beat. Safe against clipping the reply: the model only starts speaking again
-      // after end-of-speech plus silenceDurationMs (1.2s), well past this window.
-      discardAudioUntil = System.currentTimeMillis() + INTERRUPT_DISCARD_MS
-      onInterrupted()
-    }
+    if (sc.optBoolean("interrupted", false)) run(gate.onInterrupted())
 
     sc.optJSONObject("inputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let {
-      heardUserSinceLastTurn = true
-      onTranscript("you", it)
+      run(gate.onUserTranscript(it))
     }
     sc.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let {
-      emitSaiTranscript(it)
+      run(gate.onSaiTranscript(it))
     }
 
     val parts = sc.optJSONObject("modelTurn")?.optJSONArray("parts")
     if (parts != null) {
-      val discarding = System.currentTimeMillis() < discardAudioUntil
+      // Asked once per frame, not per part: re-reading the clock inside the loop could split a single
+      // frame across the discard window's edge.
+      val discarding = gate.shouldDiscardAudio()
       for (i in 0 until parts.length()) {
         val data = parts.getJSONObject(i).optJSONObject("inlineData")?.optString("data") ?: continue
         if (discarding) continue // straggler from the turn the user just barged in on
-        modelSpeaking = true // model is producing audio → mid-turn
+        gate.onAudioAccepted() // model is producing audio → mid-turn
         onAudio(Base64.decode(data, Base64.NO_WRAP))
       }
     }
 
-    // `generationComplete` also ends the model's output — it just doesn't end the TURN. Both are
-    // flush points for nudge gating, and taking either one closes a hole: a held nudge was only ever
-    // released on `turnComplete`, so a turn that produced a generation and no turn-end frame left
-    // `modelSpeaking` stuck true and EVERY later nudge deferred behind it, silently, for the rest of
-    // the call. A completion the user never hears is exactly that shape. Safe to send here: nothing
-    // further is being generated, and audio already queued still plays in order.
-    val generationEnded = sc.optBoolean("generationComplete", false)
-    val turnEnded = sc.optBoolean("turnComplete", false)
-    if (generationEnded || turnEnded) {
-      modelSpeaking = false
-      flushNudges() // deliver anything held back during the turn
-      // Only a real turn boundary ends the transcript entry; a generation boundary mid-turn does not.
-      if (turnEnded) onTurnComplete()
-    }
-    // A turn that heard the user and said nothing is worth a line: an ignored side conversation used
-    // to look exactly like a swallowed utterance or a wedged session.
-    //
-    // It states the FACT and not a motive, because the first version guessed at one and guessed wrong:
-    // it read "stayed silent — judged it wasn't for Sai" over a turn where Sai had been explicitly
-    // TOLD to stay silent (the ask-first completion nudge) and then answered the user perfectly well
-    // in the very next turn. A log line that invents a reason is worse than one that reports what
-    // happened, so it now reports what happened — and says nothing at all when we know a nudge asked
-    // for the silence, since in that case the silence is ours, not Sai's.
-    if (turnEnded) {
-      // A withheld placeholder that never became speech: say so once, here, rather than per delta.
-      // Silent suppression would trade a visible wrong line for an invisible one, and this is the
-      // evidence that says whether the model or the API produced it (see isPlaceholderSpeech).
-      if (withheld.isNotEmpty()) {
-        onLog("✗ dropped a placeholder turn (\"${withheld.trim()}\") — not speech")
-      }
-      if (heardUserSinceLastTurn && !spokeThisTurn && !silenceWasRequested) {
-        onLog("— no reply to that (Sai may have judged it wasn't meant for it) —")
-      }
-      heardUserSinceLastTurn = false
-      spokeThisTurn = false
-      silenceWasRequested = false
-      saiTurn = ""
-      withheld = ""
-    }
-  }
-
-  /**
-   * Forward a transcript delta from Sai, unless the turn so far is only a placeholder.
-   *
-   * Withholding rather than dropping matters: the test is against the accumulated turn, so the first
-   * fragment of a real sentence can look placeholder-shaped for one frame ("Empty" before
-   * "Empty-handed, sorry"). Anything held back is released the moment the turn stops matching.
-   */
-  private fun emitSaiTranscript(delta: String) {
-    saiTurn += delta
-    if (isPlaceholderSpeech(saiTurn)) {
-      withheld += delta
-      return
-    }
-    val out = withheld + delta
-    withheld = ""
-    modelSpeaking = true
-    spokeThisTurn = true
-    onTranscript("sai", out)
+    run(
+        gate.onGenerationOrTurnEnd(
+            generationEnded = sc.optBoolean("generationComplete", false),
+            turnEnded = sc.optBoolean("turnComplete", false),
+        ))
   }
 
   /**
@@ -398,8 +292,7 @@ class GeminiLiveClient(
         // once per waiter and the model was told the same thing twice ("→ nudge: capture-failed" twice
         // in the device log). Each tool CALL still gets its own response, as it must; only the spoken
         // outcome is deduped, and this latch makes the first responder the one that speaks.
-        if (!captureInFlight) outcomeNudged.set(false)
-        captureInFlight = true
+        gate.onCaptureStarted()
         // Answer IMMEDIATELY. The model cannot produce speech while a tool call in the batch is
         // unanswered, so deferring this response until the photo landed is what bought the user
         // several seconds of dead air on every "what am I looking at?" — the model wasn't refusing
@@ -424,17 +317,9 @@ class GeminiLiveClient(
                 ),
         )
         onCaptureImage { ok, message ->
-          captureInFlight = false
-          val released = synchronized(heldTaskEffects) {
-            val effs = JSONArray().also { a -> heldTaskEffects.forEach { a.put(it) } }
-            val names = heldTaskNames.toList()
-            heldTaskEffects.clear()
-            heldTaskNames.clear()
-            effs to names
-          }
-          val (effs, names) = released
+          val (effs, names) = gate.onCaptureSettled()
           // One outcome, one nudge, however many calls coalesced onto this capture.
-          if (!outcomeNudged.compareAndSet(false, true)) {
+          if (!gate.claimOutcomeNudge()) {
             onLog("📷 outcome already relayed — not telling Sai twice")
             return@onCaptureImage
           }
@@ -487,53 +372,28 @@ class GeminiLiveClient(
             }
             "endCall" -> {
               onLog("⏻ endCall")
-              onEndCall(spokeThisTurn)
+              onEndCall(gate.didSpeakThisTurn)
               JSONObject().put("result", "ok")
             }
-            // A task that ASKS FOR the photo waits for it. Approvals, interrupts and state signals go
-            // through immediately, as does any task that isn't about the photo.
-            //
-            // The test is `attachLatestImage`, for all three kinds. It used to be unconditional for
-            // forwardToAgent/enqueue — a hangover from before the flag existed, when a vision task
-            // couldn't be identified any other way — and that read the gate as "a capture is running"
-            // rather than "this request needs the picture". Since a capture can take ~30 s with
-            // retries, everything the user said in the meantime was swept in: asking for the weather
-            // during a capture had its forward HELD and then DROPPED when the camera failed, so the
-            // request ran nowhere and nothing said so. Silently discarding work the user asked for is
-            // a worse failure than the one the unconditional wait was insuring against — and that one
-            // is now covered by the rubric plus the attach-with-nothing-captured correction.
+            // A task that ASKS FOR the photo waits for it (see LiveTurnGate.routeTaskCall for why the
+            // test is `attachLatestImage` and not merely "a capture is running"). Approvals,
+            // interrupts and state signals go through immediately, as does any task that isn't about
+            // the photo.
             "forwardToAgent",
             "enqueue",
             "relayToAgent" -> {
               val wantsPhoto = c.optJSONObject("args")?.optBoolean("attachLatestImage") == true
-              if (wantsPhoto && (hasCapture || captureInFlight)) {
-                synchronized(heldTaskEffects) {
-                  heldTaskEffects.add(fcToEffect(c))
-                  heldTaskNames.add(name)
+              when (val routing = gate.routeTaskCall(name, fcToEffect(c), wantsPhoto, hasCapture)) {
+                is TaskRouting.HeldForPhoto -> {
+                  onPhotoDestined() // the photo now has somewhere to go — the UI should say so
+                  onLog(routing.log)
+                  routing.response
                 }
-                onPhotoDestined() // the photo now has somewhere to go — the UI should say so
-                onLog("⏸ holding $name (it asked for the photo) until the capture resolves")
-                // Answered immediately (truthfully) rather than deferred — an unanswered call in the
-                // batch would keep the model mute for the whole capture.
-                JSONObject()
-                    .put("result", "held-for-photo")
-                    .put(
-                        "note",
-                        "NOT started yet — waiting for the glasses photo so the task has it. It will " +
-                            "start by itself the moment the photo lands, or be cancelled if the " +
-                            "capture fails. Do not claim it is running.",
-                    )
-              } else {
-                effects.put(fcToEffect(c))
-                // Name the one case the narrowed gate can get wrong: a task that IS about the photo
-                // but never set the flag goes out blind. The prompt and rubric are what prevent it;
-                // this line is how we'd find out they didn't.
-                if (hasCapture || captureInFlight) {
-                  onLog("→ effect: $name (during a capture, but it didn't ask for the photo)")
-                } else {
-                  onLog("→ effect: $name")
+                is TaskRouting.Emit -> {
+                  effects.put(fcToEffect(c))
+                  onLog(routing.log)
+                  JSONObject().put("result", "ok")
                 }
-                JSONObject().put("result", "ok")
               }
             }
             else -> {
@@ -603,38 +463,8 @@ class GeminiLiveClient(
    * The nudge BODY is deliberately never logged: it carries agent-derived text (summaries, page
    * content) and this log is mirrored to a projector.
    */
-  fun injectNudge(kind: String, turns: String, dropIfBusy: Boolean = false) {
-    if (modelSpeaking) {
-      if (dropIfBusy) {
-        onLog("→ nudge: $kind — dropped (mid-utterance)")
-        return
-      }
-      synchronized(deferredNudges) { deferredNudges.add(kind to turns) }
-      onLog("→ nudge: $kind — held until the turn ends")
-      return
-    }
-    // A client turn before setup completes is not deliverable: `ws` may not exist yet, and even an
-    // open socket must receive the setup frame first, so anything sent ahead of it is at best racing
-    // that frame. HOLD it and send it the moment setup lands, rather than dropping it: muting during
-    // the second or two a call takes to connect used to leave the model unaware it was muted for the
-    // whole call, because MUTED_NUDGE went to a null socket and nothing said so.
-    if (!ready) {
-      // Session state needs no buffer entry — setupComplete re-asserts it by definition, and buffering
-      // it too would deliver the same instruction twice at the start of the call.
-      if (sessionState?.first == kind) {
-        onLog("→ nudge: $kind — will be asserted when the session is ready")
-        return
-      }
-      synchronized(preConnectNudges) { preConnectNudges.add(kind to turns) }
-      onLog("→ nudge: $kind — held until the session is ready")
-      return
-    }
-    // These are the nudges that ask for silence; a quiet turn after one of them is obedience, and
-    // must not be reported as Sai judging the speech wasn't for it.
-    if (kind.startsWith("muted") || kind.startsWith("complete (ask-first")) silenceWasRequested = true
-    onLog("→ nudge: $kind")
-    sendClientTurn(turns)
-  }
+  fun injectNudge(kind: String, turns: String, dropIfBusy: Boolean = false) =
+      run(gate.injectNudge(kind, turns, dropIfBusy))
 
   /**
    * Inject a nudge AND record whether it describes state the next Live session must be told about.
@@ -643,37 +473,8 @@ class GeminiLiveClient(
    * caller having to re-assert mute itself on every connect — it did, from `greetOnFirstReady`, which
    * is why the greeting could then override it.
    */
-  fun injectSessionState(kind: String, turns: String, sticky: Boolean) {
-    sessionState = if (sticky) kind to turns else null
-    injectNudge(kind, turns)
-  }
-
-  /** Deliver anything injected before the session was ready, oldest first, as one turn. */
-  private fun flushPreConnectNudges() {
-    val pending =
-        synchronized(preConnectNudges) {
-          if (preConnectNudges.isEmpty()) return
-          val kinds = preConnectNudges.joinToString(", ") { it.first }
-          val joined = preConnectNudges.joinToString("\n\n") { it.second }
-          preConnectNudges.clear()
-          kinds to joined
-        }
-    onLog("← nudge: delivering ${pending.first} (held until the session was ready)")
-    sendClientTurn(pending.second)
-  }
-
-  private fun flushNudges() {
-    val pending =
-        synchronized(deferredNudges) {
-          if (deferredNudges.isEmpty()) return
-          val kinds = deferredNudges.joinToString(", ") { it.first }
-          val joined = deferredNudges.joinToString("\n\n") { it.second }
-          deferredNudges.clear()
-          kinds to joined
-        }
-    onLog("← nudge: delivering ${pending.first} (held during the turn)")
-    sendClientTurn(pending.second)
-  }
+  fun injectSessionState(kind: String, turns: String, sticky: Boolean) =
+      run(gate.injectSessionState(kind, turns, sticky))
 
   /** Build the setup frame from the server-provided config (model/prompt/tools/voice). */
   private fun buildSetup(boot: SessionBootstrap): JSONObject {
@@ -768,9 +569,5 @@ class GeminiLiveClient(
 
   companion object {
     private const val TAG = "SaiFi:Live"
-    // How long to ignore model audio after a barge-in. Covers chunks of the interrupted turn that
-    // were already in flight; comfortably shorter than the pause before the model's next reply
-    // (end-of-speech + silenceDurationMs).
-    private const val INTERRUPT_DISCARD_MS = 700L
   }
 }
