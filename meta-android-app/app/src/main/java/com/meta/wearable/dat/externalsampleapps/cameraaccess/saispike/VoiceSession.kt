@@ -31,7 +31,9 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.VoiceC
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -121,6 +123,44 @@ class VoiceSession(
     const val DEFAULT_MAX_CALL_MS = 60L * 60_000
     const val DEFAULT_IDLE_MS = 5L * 60_000
   }
+  /**
+   * A call gets a conversation of its own.
+   *
+   * Without this every call shares one dedicated `api` session that grows forever, and that is a
+   * standing hazard rather than a tidiness problem: anything that lands in the transcript is read
+   * back as the agent's own prior turns on every later call, so one bad turn is not a bad turn, it
+   * is a permanent change of behaviour. That is not hypothetical — a stubbed reply written during
+   * local testing was still being imitated by the real agent days later, on a machine doing real
+   * work, and no amount of fixing the code that wrote it helped, because the fix does not reach the
+   * data. A call boundary bounds the blast radius to one call.
+   *
+   * Started lazily and awaited by the FIRST forward rather than fired at `start()`: a call that
+   * never asks for anything should not mint a session, and rotating in the background would race
+   * the first turn into the OLD session, which is the one case this exists to prevent.
+   *
+   * Never fatal. A failed rotation (offline, or the server's 20/hour cap) leaves the call on the
+   * previous session, which is exactly today's behaviour — degraded, not broken. Auth failures are
+   * deliberately not routed through [endCallIfRejected]; the first real send reports those, and it
+   * reports them better.
+   */
+  private val ownSession: Deferred<Unit> by lazy {
+    scope.async {
+      runCatching {
+            VoiceChannelClient.postOperation(
+                baseUrl,
+                token(),
+                "new-session",
+                // `channel` is required, not cosmetic: the route defaults to `cli`, so omitting it
+                // rotates the TERMINAL's conversation and leaves this one exactly where it was.
+                JSONObject().put("machineId", machineId).put("channel", "api"))
+          }
+          .onFailure {
+            onLog("[voice] kept the previous session — could not start a fresh one (${it.message})")
+          }
+      Unit
+    }
+  }
+
   private val transport =
       object : VoiceTransport {
         override suspend fun sendMessage(
@@ -129,6 +169,8 @@ class VoiceSession(
             attachments: JSONArray?,
             follow: Boolean,
         ) {
+          // Before the first forward, never after: `ownSession` completes once per call.
+          ownSession.await()
           val stream =
               endCallIfRejected {
                 VoiceChannelClient.openMessageStream(
