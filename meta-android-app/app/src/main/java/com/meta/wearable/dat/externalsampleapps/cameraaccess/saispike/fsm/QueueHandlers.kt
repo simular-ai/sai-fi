@@ -49,7 +49,7 @@ suspend fun applySendQueuedNow(ctx: EffectCtx, effect: Effect.SendQueuedNow) {
   ctx.state = ctx.state.removeQueued(index)
   ctx.agent.forwardTask(item.text, item.attachments)
   ctx.state = ctx.state.startTurn(item.text)
-  ctx.voice.say(startingNowLine(listOf(item.text)))
+  ctx.voice.say(startingNowLine(listOf(item.text)), supersedes = QUEUE_POSITION)
 }
 
 /**

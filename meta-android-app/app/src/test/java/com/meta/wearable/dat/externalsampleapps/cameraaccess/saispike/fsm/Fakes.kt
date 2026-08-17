@@ -82,8 +82,13 @@ class FakeChannel : VoiceChannel {
   /** Reaches the model as context; never voiced. */
   val instructed = mutableListOf<String>()
 
-  override suspend fun say(text: String) {
+  /** The subject tag on each spoken line, in step with [spoken]. */
+  val supersedeTags = mutableListOf<String?>()
+
+  /** [supersedes] is recorded, not applied: the gate is what replaces, and this fake is below it. */
+  override suspend fun say(text: String, supersedes: String?) {
     spoken += text
+    supersedeTags += supersedes
   }
 
   override suspend fun instruct(text: String) {

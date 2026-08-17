@@ -308,8 +308,21 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
       if (dropIfBusy) {
         return listOf(GateAction.Log("→ nudge: $kind — dropped (mid-utterance)"))
       }
-      synchronized(deferredNudges) { deferredNudges.add(kind to turns) }
-      return listOf(GateAction.Log("→ nudge: $kind — held until the turn ends"))
+      // A tagged line replaces a held one about the same subject. Two nudges are only ever merged
+      // into one turn, so without this the model is handed two "say this verbatim" commands at once
+      // and reads out both — and when the second exists precisely because the first stopped being
+      // true, that is a contradiction in a single breath. See VoiceChannel.say's `supersedes`.
+      val replaced =
+          synchronized(deferredNudges) {
+            val stale = kind.contains(':') && deferredNudges.any { it.first == kind }
+            if (stale) deferredNudges.removeAll { it.first == kind }
+            deferredNudges.add(kind to turns)
+            stale
+          }
+      return listOf(
+          GateAction.Log(
+              if (replaced) "→ nudge: $kind — held until the turn ends (replacing the stale one)"
+              else "→ nudge: $kind — held until the turn ends"))
     }
     // A client turn before setup completes is not deliverable: the socket may not exist yet, and even
     // an open one must receive the setup frame first, so anything sent ahead of it is at best racing

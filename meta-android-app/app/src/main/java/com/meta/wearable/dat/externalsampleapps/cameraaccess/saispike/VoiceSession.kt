@@ -58,8 +58,11 @@ const val TURN_STREAM_LOST =
 class LiveVoiceChannel(
     private val speak: (kind: String, text: String) -> Unit,
 ) : VoiceChannel {
-  override suspend fun say(text: String) {
-    speak("speak", "[system] Say to the user, briefly and verbatim: \"$text\"")
+  override suspend fun say(text: String, supersedes: String?) {
+    // The subject rides in the KIND, which is already the gate's key for a nudge — so superseding
+    // needs no new channel between here and there.
+    val kind = if (supersedes != null) "speak:$supersedes" else "speak"
+    speak(kind, "[system] Say to the user, briefly and verbatim: \"$text\"")
   }
 
   override suspend fun instruct(text: String) {

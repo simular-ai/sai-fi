@@ -185,8 +185,22 @@ interface AgentBridge {
  * wrong way round, the user hears function names and stage directions read aloud.
  */
 interface VoiceChannel {
-  /** Speak within the active turn. LITERAL speech — the user hears it verbatim. */
-  suspend fun say(text: String)
+  /**
+   * Speak within the active turn. LITERAL speech — the user hears it verbatim.
+   *
+   * [supersedes] names the SUBJECT this line is about, when a later line on the same subject should
+   * replace it rather than be spoken after it. A held line describes the state at the moment it was
+   * written, and by the time a turn ends that state may have moved on: forward a task while one is
+   * running and the user is told "I'll start that as soon as I'm done with X"; ask for it to be moved
+   * up a breath later and they are told "starting on that now". Both are true when written, and the
+   * two of them read out together are a contradiction — which is exactly what the loop eval caught
+   * ("Got it — I'll start that as soon as I'm done with: check my email. Starting on that now,
+   * alongside what I'm already doing: book a table…").
+   *
+   * Only lines sharing a tag replace each other. Untagged speech, and speech about anything else,
+   * still accumulates: two unrelated facts both need saying.
+   */
+  suspend fun say(text: String, supersedes: String? = null)
 
   /**
    * Tell the MODEL something — a correction, or a fact it needs before its next move. Reaches it as

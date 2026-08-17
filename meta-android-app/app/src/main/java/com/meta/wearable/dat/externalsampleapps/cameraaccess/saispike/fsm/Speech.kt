@@ -39,6 +39,15 @@ const val QUEUED_BEHIND_APPROVAL =
  * failure in a new place: a queued task is not underway, and a user who hears "on it" about one
  * waits for a result nothing is producing.
  */
+/**
+ * The subject shared by every line that says WHERE A TASK SITS relative to the others.
+ *
+ * Lines tagged with it replace one another rather than stacking up, because only the newest is still
+ * true: "I'll start that as soon as I'm done" and "starting on that now" describe the same task at
+ * two different moments, and spoken together they contradict each other.
+ */
+const val QUEUE_POSITION = "queue-position"
+
 fun queuedBehindTask(running: String): String =
     "Got it — I'll start that as soon as I'm done with: ${shorten(running)}."
 

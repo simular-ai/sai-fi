@@ -33,7 +33,8 @@ suspend fun applyForwardToAgent(ctx: EffectCtx, effect: Effect.ForwardToAgent) {
     // here and only here until `maybeDrainQueue` forwards it.
     ctx.voice.say(
         if (heldBehindApproval) QUEUED_BEHIND_APPROVAL
-        else queuedBehindTask(ctx.state.inFlight.last()))
+        else queuedBehindTask(ctx.state.inFlight.last()),
+        supersedes = QUEUE_POSITION)
     return
   }
 

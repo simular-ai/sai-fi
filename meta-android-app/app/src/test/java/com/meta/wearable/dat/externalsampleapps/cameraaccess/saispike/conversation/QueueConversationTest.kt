@@ -211,6 +211,71 @@ class QueueConversationTest {
     assertTrue("the running task still finished", h.saidSomethingLike("3 new emails"))
   }
 
+  /**
+   * Found by the judged loop eval, which flagged this line on a live run:
+   *
+   *   "Got it — I'll start that as soon as I'm done with: check my email. Starting on that now,
+   *    alongside what I'm already doing: book a table for two on Friday."
+   *
+   * Not a confused model — two verbatim `say` lines from the FSM, both true when written, held for
+   * the same turn and read out together. `queuedBehindTask` fires when a forward lands on a busy
+   * agent; `startingNowLine` fires a breath later when the user moves it up. Coalesced, the model is
+   * handed two "say this verbatim" commands at once and obeys both.
+   *
+   * Reachable on a device by anyone who queues something and immediately changes their mind, which
+   * is why the fix is in the product (`VoiceChannel.say(supersedes = …)`) rather than in the prompt.
+   */
+  @Test
+  fun `promoting a task replaces the line that said it would wait, rather than saying both`() =
+      runBlocking {
+        val brain =
+            ScriptedBrain.of(
+                whenSaid("first") { _, _ ->
+                  BrainTurn("sure", callsOf(fc("sendQueuedNow", "task" to TABLE)))
+                },
+                whenSaid("email") { _, _ ->
+                  BrainTurn("on it", callsOf(fc("forwardToAgent", "text" to EMAIL)))
+                },
+                whenSaid("table") { _, _ ->
+                  BrainTurn("okay", callsOf(fc("forwardToAgent", "text" to TABLE)))
+                },
+                whenNudged("[agent]") { input, _ -> BrainTurn("done — $input") },
+            )
+        // Long enough that both lines are still held when the second one lands — the window in which
+        // the user changes their mind mid-sentence.
+        val h = harness(brain).apply { speakingMs = 2_000 }
+        h.start()
+        h.user(EMAIL)
+        h.advance(100)
+        h.user(TABLE)
+        h.advance(50)
+        h.user("do the Friday booking first")
+        h.advance(3_000)
+
+        val told = h.heard()
+        assertTrue("the user should be told it is starting now: $told", told.contains("starting on that now"))
+        assertFalse(
+            "the stale line was spoken alongside the new one, in one breath: $told",
+            told.contains("as soon as i'm done"))
+        assertTrue("and the replacement should be visible in the log", h.logHas("replacing the stale one"))
+      }
+
+  @Test
+  fun `unrelated held lines still both get said`() = runBlocking {
+    // The guard on the fix: superseding is scoped to one subject. Two lines about different things
+    // must still accumulate, or the cure loses information the user needed.
+    val h = harness()
+    h.start()
+    h.gate.onSaiTranscript("talking")
+    h.gate.injectNudge("speak:queue-position", "first")
+    h.gate.injectNudge("complete", "second")
+    val flushed = h.gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true)
+
+    val sent = flushed.filterIsInstance<com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.GateAction.SendTurn>()
+    assertTrue("both should survive: ${sent.map { it.text }}", sent.single().text.contains("first"))
+    assertTrue("both should survive: ${sent.map { it.text }}", sent.single().text.contains("second"))
+  }
+
   @Test
   fun `a forward the agent refuses is admitted to, not silently swallowed`() = runBlocking {
     val h = harness()
