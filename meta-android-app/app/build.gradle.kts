@@ -169,3 +169,35 @@ dependencies {
   // emits synchronously on subscribe, which only a coroutine test can reproduce.
   testImplementation(libs.kotlinx.coroutines.test)
 }
+
+/**
+ * Let the behavioural eval see its environment.
+ *
+ * `ConciergeEvalTest` is opt-in and costs model quota, so it reads `SAI_CONVERSATION_EVAL` and a key
+ * from the environment and skips itself without them. Forwarded EXPLICITLY rather than left to the
+ * Gradle daemon's inherited environment: a daemon started before you exported the variables carries
+ * the old ones, so the eval reports "skipped" with nothing on screen to say why — which reads as a
+ * broken test rather than a switch that is off.
+ *
+ *   SAI_CONVERSATION_EVAL=1 GEMINI_API_KEY=… \
+ *     ./gradlew :app:testDebugUnitTest --tests "*ConciergeEvalTest*"
+ */
+tasks.withType<Test>().configureEach {
+  listOf(
+          "SAI_CONVERSATION_EVAL",
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY",
+          "EVAL_MODEL",
+          "JUDGE_MODEL",
+          "EVAL_ONLY",
+          "EVAL_PRINT",
+      )
+      .forEach { name -> System.getenv(name)?.let { environment(name, it) } }
+  // The eval's output IS its result — a scorecard, not an assertion count — so it has to reach the
+  // terminal. Only while it is running: on the ordinary suite this would bury 285 tests in noise.
+  // (A full run makes dozens of model calls and waits out per-minute rate limits between them, so it
+  // takes minutes. Gradle sets no default test timeout, so there is nothing to raise.)
+  if (System.getenv("SAI_CONVERSATION_EVAL") == "1") {
+    testLogging { showStandardStreams = true }
+  }
+}
