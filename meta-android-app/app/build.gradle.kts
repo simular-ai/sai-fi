@@ -32,6 +32,17 @@ android {
 
   buildFeatures { buildConfig = true }
 
+  /**
+   * The shipped voice profile, on the unit-test classpath.
+   *
+   * `VoiceProfileTest` used to grade a COPY of it vendored under `test/resources/parity/`, which is
+   * exactly how it went stale: the copy still declared `approveAlways` and told the model to offer
+   * "always allow" months after the product retired both, and the test that exists to catch a
+   * dropped prompt block was reading a file nothing ships. A test about the shipped artefact reads
+   * the shipped artefact.
+   */
+  sourceSets { getByName("test") { resources.srcDir("src/main/assets") } }
+
   defaultConfig {
     applicationId = "ai.simular.saiglasses"
     minSdk = 31
@@ -173,18 +184,23 @@ dependencies {
 /**
  * Let the behavioural eval see its environment.
  *
- * `ConciergeEvalTest` is opt-in and costs model quota, so it reads `SAI_CONVERSATION_EVAL` and a key
- * from the environment and skips itself without them. Forwarded EXPLICITLY rather than left to the
+ * The judged tiers are opt-in and cost model quota, so each reads its own switch and a key from the
+ * environment and skips itself without them: `LoopEvalTest` on `SAI_CONVERSATION_EVAL`,
+ * `TranscriptEvalTest` on `SAI_TRANSCRIPT_EVAL`. Forwarded EXPLICITLY rather than left to the
  * Gradle daemon's inherited environment: a daemon started before you exported the variables carries
  * the old ones, so the eval reports "skipped" with nothing on screen to say why — which reads as a
  * broken test rather than a switch that is off.
  *
  *   SAI_CONVERSATION_EVAL=1 GEMINI_API_KEY=… \
- *     ./gradlew :app:testDebugUnitTest --tests "*ConciergeEvalTest*"
+ *     ./gradlew :app:testDebugUnitTest --tests "*LoopEvalTest*"
  */
 tasks.withType<Test>().configureEach {
   listOf(
           "SAI_CONVERSATION_EVAL",
+          "SAI_TRANSCRIPT_EVAL",
+          // Rewriting the golden fixtures. Off in CI, and that is the point: a golden set that
+          // regenerates itself on every run cannot detect drift. See RegenerateGoldensTest.
+          "SAI_REGEN_GOLDENS",
           "GEMINI_API_KEY",
           "GOOGLE_API_KEY",
           "EVAL_MODEL",
@@ -207,8 +223,8 @@ tasks.withType<Test>().configureEach {
   // terminal. Only while it is running: on the ordinary suite this would bury 285 tests in noise.
   // (A full run makes dozens of model calls and waits out per-minute rate limits between them, so it
   // takes minutes. Gradle sets no default test timeout, so there is nothing to raise.)
-  if (System.getenv("SAI_CONVERSATION_EVAL") == "1" || System.getenv("SAI_PRESENTER") == "1" ||
-      System.getenv("SAI_DEMO") == "1") {
+  if (System.getenv("SAI_CONVERSATION_EVAL") == "1" || System.getenv("SAI_TRANSCRIPT_EVAL") == "1" ||
+      System.getenv("SAI_PRESENTER") == "1" || System.getenv("SAI_DEMO") == "1") {
     testLogging { showStandardStreams = true }
   }
 }

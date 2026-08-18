@@ -93,7 +93,7 @@ below — the path still carries the app's earlier name).
 | `VoiceSession.kt` | One call's concierge: the FSM, its two ports, the SSE reader, reconnect, and the cost guard. Replaces the old WebSocket. |
 | `HttpAgentBridge.kt` | The FSM's `AgentBridge` over HTTP, plus the photo stash and the location line folded into a task's text. |
 | `VoiceConverters.kt` | Typed agent events back to the JSON that `ActivityLog` and `AgentEventRouter` read. |
-| `ConciergeProtocol.kt` | Kotlin port of the server's nudge logic (kept honest by parity fixtures). |
+| `ConciergeProtocol.kt` | The canonical nudge wording — originally a port of the server's, now the only copy (pinned by the string goldens). |
 | `ActivityLog.kt` | Kotlin port of the server's activity-log describer; feeds `getSaiStatus` and the UI. |
 | `AgentEventRouter.kt` | Routes incoming agent events to speech/log/UI. |
 
@@ -161,7 +161,7 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 
 | Path | What it is |
 | --- | --- |
-| `voice-profile.json` | The system prompt (41 blocks), the 18 tool declarations, the model and the voice. **Generated** from the server's source before it was deleted — the wording is load-bearing, so it was never retyped. The same bytes are vendored to `app/src/test/resources/parity/prompt-and-tools.json` and read by cloud-api's eval. |
+| `voice-profile.json` | The system prompt (41 blocks), the 17 tool declarations, the model and the voice. **Generated** from the server's source before it was deleted — the wording is load-bearing, so it was never retyped. It is on the unit-test classpath too (`sourceSets` in `build.gradle.kts`), so `VoiceProfileTest` and `LiveBrain` grade the file the app loads. There is no vendored second copy: the one that existed drifted, and is gone. |
 
 ### Resources — `app/src/main/res/`
 
@@ -174,17 +174,22 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 
 ### Tests — `app/src/test/java/…/saispike/`
 
-306 JVM tests, no device or emulator needed — everything below runs on `./gradlew
-:app:testDebugUnitTest` except the three tiers that cost money, which are gated on an environment
-variable and skip themselves otherwise. Five kinds:
+321 JVM tests, no device or emulator needed — everything below runs on `./gradlew
+:app:testDebugUnitTest` except the tiers that cost money and the golden generator, each gated on an
+environment variable and skipping itself otherwise. Five kinds:
 
 - **`*Test.kt`** — behaviour tests for one class each (`GlassesLinkTest`, `HangupPolicyTest`,
   `ReconnectPolicyTest`, `GreetingGateTest`, `HeldNudgeQueueTest`, `MachineSwitcherTest`,
   `AgentEventRouterTest`, `ActivityLogTest`, `ConciergeProtocolTest`, `LiveTurnGateTest`,
   `VoiceChannelClientTest`, `HttpAgentBridgeTest`, `CallNotificationTextTest`, `PresenterSocketTest`,
   `AskFirstStepperTest`, `ui/SaiTabTest`).
-- **`*ParityTest.kt`** — replay a shared fixture to prove the Kotlin port matches the server
-  (`ConciergeProtocolParityTest`, `ActivityLogParityTest`).
+- **`*GoldenTest.kt`** — replay the committed JSON in `resources/parity/` to pin every string the
+  concierge speaks or shows (`ConciergeProtocolGoldenTest`, `ActivityLogGoldenTest`), plus the
+  assertions about what those strings SAY, which a byte diff cannot tell you. `GoldenFixtures.kt`
+  builds them from the real helpers on a fixed clock and `RegenerateGoldensTest`
+  (`SAI_REGEN_GOLDENS=1`) is the only thing that writes them. These were `*ParityTest` while cloud-api
+  held a second, canonical implementation in TypeScript; there is one implementation now, so what they
+  pin is the wording rather than a port.
 - **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 59 scenarios ported from the
   server's catalog, each naming the failure it prevents.
 - **`conversation/`** — the closed loop, with everything real except the brain and the agent: a fake
@@ -197,9 +202,19 @@ variable and skip themselves otherwise. Five kinds:
 - **The paid tiers** — off by default, each behind its own switch: `LiveAgentTest` /
   `SummaryFixLiveTest` (`SAI_LIVE_AGENT=1`) drive a real cloud-api to catch **contract drift** and
   nothing else; `eval/LoopEvalTest` (`SAI_CONVERSATION_EVAL=1`) runs the real model through the real
-  FSM and grades the transcript against the rubric ported in `eval/Judge.kt`; `DemoFlowTest`
-  (`SAI_DEMO=1`) drives a real model and a real agent end to end, paced for the presenter so a demo
-  can be rehearsed without hardware.
+  FSM and grades the transcript against `eval/rubric.json`; `eval/TranscriptEvalTest`
+  (`SAI_TRANSCRIPT_EVAL=1`) runs it over the 32 fixed transcripts in `eval/Transcripts.kt` with no FSM,
+  grading phrasing by judge and effect choice deterministically; `DemoFlowTest` (`SAI_DEMO=1`) drives a
+  real model and a real agent end to end, paced for the presenter so a demo can be rehearsed without
+  hardware.
+
+  The two judged tiers share the rubric and see different failures, which is why both exist — one
+  drives a queue that really exists, the other 32 conversations that hold still. `EvalDataTest` asserts
+  the wiring between the catalogue and the transcripts (every target resolves, none targets a rule the
+  judge cannot grade, every transcript checks something) for free, on every push. `TranscriptEvalTest`
+  came from cloud-api on 2026-08-18, along with the rubric: its subject was always this repo's prompt,
+  tools and nudge wording, all three of which it had to vendor over there — and the vendored prompt
+  went stale by a whole retired feature without anything noticing.
 
 ---
 

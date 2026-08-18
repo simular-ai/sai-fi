@@ -14,8 +14,8 @@ it is deliberately made of endpoints that already existed.
 > FSM moved to the device (see sai-fi's `docs/VOICE_FSM.md`), the client brings its own Gemini key,
 > and voice is not billed. See `docs/plans/2026-08-12-reduced-voice-concierge.md`.
 
-Machine-readable companions, generated from the source and committed under
-`cloud-api/src/services/concierge/voice/contract/fixtures/`.
+Machine-readable companions, generated from the Kotlin source and committed under
+`meta-android-app/app/src/test/resources/parity/` (see §8).
 
 ## 1. Getting a session
 
@@ -189,10 +189,13 @@ If you implement this in another language, mirror the guards that already exist 
 new ones:
 
 1. **Rendered strings** — load the fixture JSON and assert byte-identical output.
-   (`ConciergeProtocolParityTest.kt` / `ActivityLogParityTest.kt` are the reference.)
+   (`ConciergeProtocolGoldenTest.kt` / `ActivityLogGoldenTest.kt` are the reference.)
 2. **Orchestration** — sai-fi's `FsmGoldenTest` runs 59 scenarios that pin what the FSM does with
    every input sequence that has ever mattered. If you write your own, that catalog is the spec worth
    copying; each scenario names the failure it prevents.
 
-Refresh the fixtures with `npm run -w cloud-api concierge:fixtures` and copy them across; the
-generator writes a vendored copy automatically while both trees share a checkout.
+The fixtures live at `meta-android-app/app/src/test/resources/parity/` and are generated from the
+Kotlin helpers by `SAI_REGEN_GOLDENS=1 ./gradlew :app:testDebugUnitTest --tests
+"*RegenerateGoldensTest*"`. Take a copy at a pinned ref rather than tracking `main`, and diff it when
+you update: that is the one thing the previous arrangement got wrong. cloud-api generated them and a
+human copied them here, so the copy drifted for months without failing anything.

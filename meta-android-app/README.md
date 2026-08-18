@@ -121,9 +121,9 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ```
 
 `--rerun` matters: without it the test task reports `UP-TO-DATE` from cache and verifies nothing.
-The repo CI runs the same assemble + unit-test gate — 97 JVM tests across 14 classes, including the
-cross-port parity tests that hold the Kotlin and TypeScript implementations of the nudge strings, the
-activity log and the WS protocol to the same fixtures. On-device and by-ear checks are still manual.
+The repo CI runs the same assemble + unit-test gate — 321 JVM tests, including the string goldens that
+pin every line the concierge speaks or shows byte for byte, the 59-scenario FSM golden catalog, and the
+conversation harness. On-device and by-ear checks are still manual.
 
 In Android Studio: open the `meta-android-app` folder (not its parent), fill in `local.properties`,
 **File > Sync Project with Gradle Files**, then Run.

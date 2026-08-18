@@ -100,7 +100,7 @@ while nothing is running, for instance.
 | `VoiceSession`                       | One call's concierge: owns the FSM, its two ports, and the reader for each turn's stream. Mints a **fresh Firebase ID token per attempt** (a long call outlives the ~1h one it started with). Effects go straight into the local FSM — there is no round trip. A turn's stream is read on its own coroutine, never awaited by the send that opened it: `forwardTask` runs inside the FSM's mutex and the FSM needs that mutex for every event about to arrive. A dropped stream is reported to the FSM as an **error, never a completion** — the agent may still be working, and the one thing that must not be said is "done". **Owns the cost guard**, which used to be the server's: there is no server-side notion of this call at all, and an open microphone costs money whether or not anyone is still wearing the glasses. |
 | `HttpAgentBridge`                    | The FSM's `AgentBridge` over `/v1/agents/*` — forward, steer, abort, reset, approve. There is no endpoint for HOLDING a task: the queue is local, so the agent is told about a task only when it starts. Also holds the photo stash (taken when a task is held, so a later capture cannot ride along) and folds a location fix into the task's text, because a user message has no metadata channel.                                                                                                                                                                                                                                                                                                                                     |
 | `ConciergeClient`                    | HTTP: `POST /session`, `GET /v1/agents/machines`, `GET /v1/agents/context` (recallHistory), `POST /v1/agents/upload`. Dependency-free; non-2xx throws typed exceptions so permanent failures are distinguishable.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `ActivityLog` / `ConciergeProtocol`  | Kotlin ports of the server's `core/activity-log.ts` and `core/nudges.ts` (`describeAgentEvent` with prompt-injection fencing — port verbatim; drift is caught by the cross-port parity fixtures, §8.1). Feed `getSaiStatus` + the UI activity view.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `ActivityLog` / `ConciergeProtocol`  | The canonical nudge and activity-log wording (`describeAgentEvent` with prompt-injection fencing). Originally ported verbatim from the server's `core/activity-log.ts` / `core/nudges.ts`; those are gone and these are the only copy, pinned by the string goldens (§8.1). Feed `getSaiStatus` + the UI activity view.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `GlassesGestureSession`              | DAT `DeviceSession` (no display/camera capability) reacting to the only temple gestures DAT surfaces: tap = mute/unmute Sai, tap-and-hold/doff/fold = end (all just `DeviceSessionState`; no gesture is remappable — see §6 "Glasses gestures").                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `SaiFiApp` / `MainActivity`     | App init (`Wearables.initialize` once); `MainActivity` is now just the DAT-registration deep-link callback host (`saiwearables`) — the CameraAccess sample UI was pruned in productization.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `fsm/` (13 files)                    | **The conversation state machine**, ported from the server: modes and transitions, the bounded effect grammar and its parse boundary, the admission rule that holds a mid-turn task instead of folding it in, the local held-task queue, the cost guard, and every line the FSM speaks. Everything but `Concierge.kt` is pure, which is what makes the 59-scenario golden catalog runnable as JVM tests; `Concierge.kt` serialises all four input kinds through one `Mutex`, because two forwards interleaving at a suspension point books the restaurant twice. Design: [`VOICE_FSM.md`](VOICE_FSM.md). **This drives every call** — `CallService.buildConcierge` builds one `VoiceSession` per call and feeds the model's tool calls straight into it.                        |
@@ -120,8 +120,8 @@ while nothing is running, for instance.
    agent-event/agent-activity/speak/instruct/approval-timeout down; plus `usage`, `attachment`,
    Don't duplicate them here either. Note what the authority is now: there is no wire-message
    fixture, because there are no server→client frames — the SSE stream carries agent events and
-   nothing else. What is still pinned is the RENDERED text (`ConciergeProtocolParityTest`,
-   `ActivityLogParityTest`) and the orchestration (`FsmGoldenTest`, 59 scenarios).
+   nothing else. What is still pinned is the RENDERED text (`ConciergeProtocolGoldenTest`,
+   `ActivityLogGoldenTest`) and the orchestration (`FsmGoldenTest`, 59 scenarios).
 4. **Nudge discipline (port exactly):** never inject a nudge mid-utterance (self-interruption);
    defer real nudges until `turnComplete`; on `serverContent.interrupted` flush queued playback
    (barge-in). There are no dead-air fills to speak or drop: the server-side watchdog that produced
@@ -323,14 +323,21 @@ path and the only one that survives unplugging.)
 
 Layered the same way the server's own suite is — deterministic first, by-ear last:
 
-1. **Cross-port parity fixtures — IMPLEMENTED.** The nudge strings, the activity log and the WS
-   protocol exist twice (TypeScript there, Kotlin here), and committed JSON fixtures in
-   `app/src/test/resources/parity/` are the seam: agent-event nudges including the prompt-injection
-   cases, ask-first, activity-render, `statusText()`/`msSinceTaskStart()` sequences on a fixed injected
-   clock, and the shared constants. They are generated by calling the server's real functions, so
-   `ConciergeProtocolParityTest` and `ActivityLogParityTest` replaying them here means **TS↔Kotlin drift
-   breaks a test, not a demo**. Refreshing them is a manual cross-repository copy — the README's
-   "Keeping the parity fixtures in sync" is the whole procedure, and nothing automated does it.
+1. **String goldens — IMPLEMENTED.** Every string the concierge speaks or shows is pinned byte for
+   byte by committed JSON in `app/src/test/resources/parity/`: agent-event nudges including the
+   prompt-injection cases, ask-first, activity-render, `statusText()`/`msSinceTaskStart()` sequences on
+   a fixed injected clock, and the `[system]` constants. `GoldenFixtures.kt` builds them by calling the
+   real helpers; `ConciergeProtocolGoldenTest` and `ActivityLogGoldenTest` replay them, so **a reworded
+   spoken line breaks a test, not a demo** — which is what you want for wording that was nearly all
+   found by hearing it fail on a call. Rewriting them is one command in this repo
+   (`SAI_REGEN_GOLDENS=1`, see the README).
+
+   These were cross-port parity fixtures: the strings existed twice, canonically in TypeScript in
+   cloud-api and here in Kotlin, and the JSON held the two equal across a hand-run `cp` between the
+   repositories. cloud-api never rendered them at request time, so after the split its copy existed
+   only to generate this JSON, and nothing checked the crossing. It went stale — by 2026-08-18 the
+   vendored voice profile still declared an `approveAlways` tool retired months earlier. One
+   implementation now, nothing to vendor, and the generator lives next to the code it grades.
 2. **Kotlin JVM unit tests — IMPLEMENTED.** `app/src/test/…/saispike/` (`./gradlew
    :app:testDebugUnitTest`, and pass `--rerun` or a cached UP-TO-DATE will report success without
    running anything): the pure policies one class each, `ConciergeProtocolTest` (choice≠approve/deny,
@@ -355,9 +362,17 @@ Layered the same way the server's own suite is — deterministic first, by-ear l
    a real cloud-api, and exists for **contract drift only** — an SSE field that changed shape, a
    status the mapper does not know — because behaviour belongs in the scripted tier where it is
    reproducible and free. `SAI_CONVERSATION_EVAL=1` (`eval/LoopEvalTest`) puts the real model through
-   the real FSM and grades the transcript rule by rule against `eval/Judge.kt`, a faithful port of
-   cloud-api's rubric. `SAI_DEMO=1` (`DemoFlowTest`) drives a real model **and** a real agent end to
-   end. CI never sets any of the three.
+   the real FSM and grades the transcript rule by rule against `eval/rubric.json`.
+   `SAI_TRANSCRIPT_EVAL=1` (`eval/TranscriptEvalTest`) runs it over 32 fixed transcripts with no FSM,
+   grading phrasing by judge and effect choice deterministically — the two share the rubric and catch
+   different things, since this one can grade whether she SAYS the right thing about a waiting task but
+   not whether the task was really waiting. `SAI_DEMO=1` (`DemoFlowTest`) drives a real model **and** a
+   real agent end to end. CI never sets any of them.
+
+   In both judged tiers only the deterministic half fails the build; the judge's verdicts print as a
+   score. They come from a non-deterministic grader running a model tier below the one the glasses use,
+   so a red is as often capability or rule-wording as it is a regression — and a check that is always
+   red is a check everyone learns to skip.
 5. **On-device audio checks** — Phase 0 gate (spoken exchange + barge-in), AEC sanity (model must
    not hear itself; verify with wired headphones if it does), SCO route + wideband check,
    route-loss drill. Check 7 of [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) is the by-ear form of the
