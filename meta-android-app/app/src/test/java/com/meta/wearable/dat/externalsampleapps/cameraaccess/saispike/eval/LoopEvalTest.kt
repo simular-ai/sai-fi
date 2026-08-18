@@ -13,18 +13,18 @@
 //      JUDGE_MODEL (grader, default gemini-3.5-flash-lite)
 //      EVAL_PRINT=1 dumps each captured conversation
 //
-// **This complements cloud-api's eval; it does not replace it.** That one drives the model over 32
+// **This complements `TranscriptEvalTest`; it does not replace it.** That one drives the model over 32
 // fixed transcripts with no FSM: broad coverage of phrasing and classification, but its queue is a
 // fiction — `forwardToAgent` resolves to a canned `ok`, and the `session-state` a scenario reacts to
 // was written by hand. So it can grade whether the model SAYS the right thing about a waiting task,
 // but not whether the task was really waiting. This one runs far fewer conversations through the
-// real queue, where the answer is a fact rather than a premise. Both grade against the same rubric,
-// which is why cloud-api publishes it (`npm run -w cloud-api concierge:rubric`).
+// real queue, where the answer is a fact rather than a premise. Both grade against the same
+// `eval/rubric.json`, so a behaviour tightened in one cannot stay loose in the other.
 //
 // **Read the model before you read the failures.** The default stand-in is a tier BELOW what the
-// glasses run, so it under-reports prompt quality; cloud-api's notes record `queued-not-underway`
-// and `reorder-is-not-a-cancellation` failing on lite and passing on `gemini-3-flash-preview`. Both
-// are exercised here. Re-run a red on a flash-class model before concluding anything about the
+// glasses run, so it under-reports prompt quality; the recorded measurements have
+// `queued-not-underway` and `reorder-is-not-a-cancellation` failing on lite and passing on
+// `gemini-3-flash-preview`. Both are exercised here. Re-run a red on a flash-class model before concluding anything about the
 // prompt — and if a rule fires on a line you would have been happy to hear on the glasses, suspect
 // the rule's wording first.
 
@@ -284,8 +284,8 @@ class LoopEvalTest {
   }
 
   /**
-   * Render for the judge, in the vocabulary cloud-api's judge prompt already describes: the
-   * concierge's own lines, and "agent:" for internal context it received.
+   * Render for the judge, in the vocabulary the judge prompt already describes: the concierge's own
+   * lines, and "agent:" for internal context it received.
    */
   private fun render(transcript: List<Line>): String =
       transcript.joinToString("\n") { l ->

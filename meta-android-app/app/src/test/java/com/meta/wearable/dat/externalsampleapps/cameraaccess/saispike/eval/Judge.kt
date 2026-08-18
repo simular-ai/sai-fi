@@ -2,8 +2,8 @@
 
 // The grader: one model call per rule, over one captured transcript.
 //
-// The prompt is a faithful port of cloud-api's, wording included. It is load-bearing in a way that is
-// easy to miss — the paragraph telling the judge that a silent tool call is INTENDED exists because
+// The prompt began as a port of cloud-api's, wording included, and both judged tiers use it. It is
+// load-bearing in a way that is easy to miss — the paragraph telling the judge that a silent tool call is INTENDED exists because
 // without it the grader quoted "(no speech — silently calls the tool)" as an offending line and
 // failed rules that have nothing to do with how much the concierge says.
 

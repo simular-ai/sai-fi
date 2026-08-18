@@ -61,12 +61,12 @@ cd meta-android-app && ./gradlew :app:testDebugUnitTest --rerun
 
 `--rerun` matters. Without it the test task reports `UP-TO-DATE` from cache and verifies nothing.
 
-CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 306 JVM tests,
-including the 59-scenario FSM golden catalog, the cross-port parity tests below, and the conversation
+CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 321 JVM tests,
+including the 59-scenario FSM golden catalog, the string goldens described below, and the conversation
 harness that drives a fake brain through the real gate, FSM and bridge down to a scripted agent. On-device
 and by-ear checks are still manual: [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md).
 
-Three further tiers wake something real, so they are **off unless you ask for them** and cost money
+Four further tiers wake something real, so they are **off unless you ask for them** and cost money
 when you do. CI never sets any of these:
 
 ```bash
@@ -76,9 +76,19 @@ SAI_LIVE_AGENT=1 ./gradlew :app:testDebugUnitTest --tests "*LiveAgent*" --rerun
 # the real model through the real FSM, graded against the rubric (a full run takes minutes)
 SAI_CONVERSATION_EVAL=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*LoopEvalTest*" --rerun
 
+# the real model over 32 fixed transcripts, no FSM — phrasing and effect choice, graded the same way
+SAI_TRANSCRIPT_EVAL=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*TranscriptEvalTest*" --rerun
+
 # a real model AND a real agent, end to end; add SAI_PRESENTER=1 to watch it in the dashboard
 SAI_DEMO=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*DemoFlowTest*" --rerun
 ```
+
+The two judged tiers grade against the same rubric and see different failures, which is why both
+exist: `LoopEvalTest` runs a handful of conversations through a queue that really exists;
+`TranscriptEvalTest` runs 32 fixed transcripts with no FSM, so it can grade whether she SAYS the right
+thing about a waiting task but not whether the task was really waiting. Narrow either with
+`EVAL_ONLY="<name fragment>"`, and read `EVAL_MODEL` before reading a red — the default is a tier
+below what the glasses run.
 
 `--rerun` is not optional for any of them: Gradle does not treat environment variables as task
 inputs, so a second run with different settings is UP-TO-DATE and reports success without running
@@ -128,27 +138,36 @@ Then set `presenter_url` and `presenter_key` in `local.properties`. **DEBUG buil
 plaintext `ws://`, and nothing is persisted. It can crash, be restarted, or be abandoned mid-demo
 with no consequence for the call.
 
-## Keeping the parity fixtures in sync
+## Rewriting the golden fixtures
 
-The nudge strings, the activity log and the WS protocol are implemented twice — TypeScript on the
-server, Kotlin here — and JSON fixtures in `meta-android-app/app/src/test/resources/parity/` are what
-keep the two ports honest. The Kotlin tests replay them; a drift fails a test.
+Every string the concierge speaks or shows — the nudges, the activity log, the spoken status — is
+pinned byte for byte by JSON goldens in `meta-android-app/app/src/test/resources/parity/`. The tests
+replay them; a reworded line fails one. That is the point: the wording is load-bearing, nearly all of
+it found by hearing it fail on a real call, so a change to it should be a diff someone reviews rather
+than something a user notices on the glasses.
 
-This is the one procedure that crosses both repositories, and **the only place this repo needs the
-server's** — the fixtures are generated from the TypeScript originals, so they cannot be refreshed from
-here:
+Generation is a switched-off test, and only it writes them:
 
 ```bash
-# in simular-pro-unified-ui
-npm run -w cloud-api concierge:fixtures
-cp cloud-api/src/services/concierge/voice/contract/fixtures/*.json \
-   <sai-fi>/meta-android-app/app/src/test/resources/parity/
+cd meta-android-app
+SAI_REGEN_GOLDENS=1 ./gradlew :app:testDebugUnitTest --rerun --tests "*RegenerateGoldensTest*"
+git diff app/src/test/resources/parity/   # read the wording change, then commit it
 ```
 
-While both trees shared a checkout, a server-side test compared the two directories automatically.
-After the split nothing does — each side only catches drift against *its own* port. Until a CI job
-fetches the fixtures at a pinned ref and diffs them, **this copy step is the entire mechanism, and it
-is a human one.**
+**Why a test rather than an ordinary Gradle task, and why the environment switch.** It needs the
+unit-test classpath and the same `org.json` the ports run against. The switch is what keeps it honest:
+CI never sets `SAI_REGEN_GOLDENS`. In its previous life this generator WAS an ordinary test that wrote
+its own expected output, so every CI run silently rewrote the fixtures and drift became undetectable.
+A golden that regenerates itself is not a golden.
+
+**This used to cross both repositories.** The strings were implemented twice — canonically in
+TypeScript in cloud-api, and here in Kotlin — and the fixtures were how the two ports were held equal.
+cloud-api never rendered them at request time, so once the conversation moved onto the device its copy
+existed only to generate this JSON, and the crossing between the repos was a hand-run `cp` that
+nothing checked. It went stale exactly as you would expect: by 2026-08-18 the vendored voice profile
+still declared an `approveAlways` tool the product had retired months earlier, so both the test that
+graded it and cloud-api's eval were measuring a prompt for a feature that no longer existed. There is
+one implementation now, and nothing left to vendor.
 
 ## Provenance and licensing
 
