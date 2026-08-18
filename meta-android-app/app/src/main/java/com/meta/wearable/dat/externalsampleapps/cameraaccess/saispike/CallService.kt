@@ -1034,21 +1034,36 @@ class CallService : Service() {
 
   // ── Reconnect (Live session token expiry ~30 min, or a network blip) ────────────────────────────
 
+  /**
+   * Is a reconnect still the right thing to be doing? The same three conditions that gate starting
+   * one, so the loop cannot outlive the reason it was started.
+   */
+  private fun reconnectStillWanted() = callActive && !ending && !audioPaused
+
   private fun scheduleLiveReconnect() {
-    if (!callActive || liveReconnecting || ending || audioPaused) return
+    if (!reconnectStillWanted() || liveReconnecting) return
     liveReconnecting = true
     CallController.update { it.copy(reconnecting = true) }
     status("reconnecting…")
     log("live: session dropped — reconnecting…")
     scope.launch {
       var backoff = ReconnectPolicy.INITIAL_BACKOFF_MS
-      while (callActive) {
+      while (reconnectStillWanted()) {
         delay(backoff)
-        if (!callActive) break
+        // Re-checked AFTER the wait, and against all three conditions rather than `callActive`
+        // alone. A pause or a teardown during the backoff is the ordinary case and neither clears
+        // `callActive` — both do drop the Live client, so `live?.connect` was a null-safe no-op that
+        // could not throw, and the loop went on to clear `reconnecting`, announce "live — talk" and
+        // log "live: reconnected" over a call whose mic and session were down. The header then read
+        // "live — talk" beside the PAUSED chip until the user resumed.
+        if (!reconnectStillWanted()) break
         try {
           params ?: break
+          // Taken as a value, so a client that went away mid-flight is a break rather than a silent
+          // no-op that reports success.
+          val client = live ?: break
           endTurn()
-          live?.connect(bootstrap(), BuildConfig.GEMINI_API_KEY)
+          client.connect(bootstrap(), BuildConfig.GEMINI_API_KEY)
           CallController.update { it.copy(reconnecting = false) }
           status("live — talk")
           log("live: reconnected")
@@ -1165,7 +1180,6 @@ class CallService : Service() {
     // reason, so the pair is emitted atomically once the fix is in hand.
     scope.launch {
       val fix = PhoneLocation.current(applicationContext, ::log)
-      if (hasMessageEffect(effects)) lastTaskForwardAt = SystemClock.elapsedRealtime()
       sendEffectsNow(effects, wantsPhoto, fix)
     }
   }
@@ -1196,6 +1210,13 @@ class CallService : Service() {
       wantsPhoto: Boolean,
       fix: PhoneLocation.Result?,
   ) {
+    // Stamped HERE, at the one point every path funnels through, and not at a call site. It used to
+    // live on the location branch only — so the ordinary forward, which is the common one by far,
+    // never stamped at all and the gate this field exists for did nothing: a 40s task read as 40s of
+    // user absence, and the finished answer the user was sitting there waiting for was withheld with
+    // the ask-first wording. One assignment behind two callers is how that came back; there is now
+    // no path to the agent that does not pass through this line.
+    if (hasMessageEffect(effects)) lastTaskForwardAt = SystemClock.elapsedRealtime()
     when (fix) {
       is PhoneLocation.Result.Success -> {
         concierge?.bridge?.setPendingLocation(fix.place.toTaskLocation())
@@ -1326,11 +1347,13 @@ class CallService : Service() {
    */
   private fun markTurnCutOff() {
     val entry = CallController.markLiveTurnCutOff() ?: return
-    observer.onTurn(
-        entry.id,
-        if (entry.kind == CallController.Kind.YOU) "you" else "sai",
-        entry.text,
-    )
+    val isSai = entry.kind != CallController.Kind.YOU
+    // The same gate `transcript()` applies, and for the same reason: muted, what Sai produced stays
+    // in the phone's log and off the projector. This path published unconditionally, and by
+    // construction it only ever marks a SAI entry — so every barge-in during a muted call pushed the
+    // one kind of turn the mute is meant to keep off the dashboard.
+    if (isSai && saiMuted) return
+    observer.onTurn(entry.id, if (isSai) "sai" else "you", entry.text)
   }
 
   private fun endTurn() = CallController.endTurn()

@@ -30,10 +30,13 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.Timer
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.VoiceChannel
 import android.os.Handler
 import android.os.Looper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -210,6 +213,14 @@ class VoiceSession(
       )
 
   private var turnJob: Job? = null
+  /**
+   * The connection [turnJob] is reading, held so it can be disconnected.
+   *
+   * Cancelling the job does not end the read: it is parked in a blocking `readLine` on a connection
+   * with no read timeout, and coroutine cancellation cannot interrupt that. Only closing the
+   * connection can, which is what [VoiceChannelClient.TurnStream.discard] does.
+   */
+  private var turnStream: VoiceChannelClient.TurnStream? = null
   @Volatile private var active = false
 
   private val guard =
@@ -282,6 +293,11 @@ class VoiceSession(
    */
   private fun followTurn(stream: VoiceChannelClient.TurnStream) {
     turnJob?.cancel()
+    // …and hang up on the superseded connection, because cancelling the job does not: its reader is
+    // blocked in readLine with no read timeout, so the socket stayed open and the IO thread stayed
+    // parked until the server got round to ending that turn on its own.
+    turnStream?.discard()
+    turnStream = stream
     turnJob =
         scope.launch {
           try {
@@ -291,6 +307,12 @@ class VoiceSession(
             onConnectionChange(true)
             stream.read(
                 onEvent = { event ->
+                  // A turn this device has stopped following must not be heard from. `onAgentEvent`
+                  // does not suspend, so without this check it ran — a line in the activity log and
+                  // a nudge in front of the model — before the suspending call below noticed the
+                  // cancellation. One stale event from an abandoned turn is enough to make Sai
+                  // report the wrong task's result.
+                  currentCoroutineContext().ensureActive()
                   // The log and the nudge router see every event; the FSM decides what it means.
                   onAgentEvent(event)
                   concierge.handleAgentEvent(event)
@@ -300,6 +322,10 @@ class VoiceSession(
             // Deliberately NOT reported as disconnected here. A turn ending normally is the common
             // case and leaves nothing connected by design; flagging it would light the chip — which
             // outranks paused and muted — for the whole gap until the next task.
+          } catch (e: CancellationException) {
+            // Superseded or torn down — not a drop. Reported as one it lit the disconnected chip and
+            // then told the FSM its live turn had been lost, on the way to starting a new one.
+            throw e
           } catch (e: Exception) {
             onLog("[voice] turn stream dropped: ${e.message}")
             onConnectionChange(false)
@@ -310,6 +336,8 @@ class VoiceSession(
           if (active && concierge.getState().isWorking()) {
             concierge.handleAgentEvent(AgentEvent.Error(TURN_STREAM_LOST))
           }
+          // Only if it is still ours: a newer turn may already have taken the slot.
+          if (turnStream === stream) turnStream = null
         }
   }
 
@@ -348,6 +376,10 @@ class VoiceSession(
     active = false
     turnJob?.cancel()
     turnJob = null
+    // The cancel above cannot reach a blocking read; this can. Without it a call could end with its
+    // last turn's connection still open and an IO thread still parked on it.
+    turnStream?.discard()
+    turnStream = null
     guard.dispose()
     concierge.stop()
   }

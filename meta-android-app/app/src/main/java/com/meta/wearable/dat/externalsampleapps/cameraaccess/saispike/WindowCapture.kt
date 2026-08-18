@@ -52,6 +52,14 @@ class WindowCapture(
   private var thread: HandlerThread? = null
   private var encode: Handler? = null
   @Volatile private var running = false
+  /**
+   * Which run a scheduled hop belongs to. Bumped by [stop], read on the encode thread.
+   *
+   * `running` alone cannot carry this: the hop back to the main thread is posted from the encode
+   * thread, so it can land after a [stop] *and* a later [start], by which point the flag is true
+   * again and the hop looks live.
+   */
+  @Volatile private var generation = 0
   private var bitmap: Bitmap? = null
   private var logged = false
 
@@ -68,6 +76,10 @@ class WindowCapture(
 
   fun stop() {
     running = false
+    // Retires any hop already posted from the encode thread. `removeCallbacks` cannot reach those —
+    // it matches by Runnable identity, and that one is posted from another thread at an arbitrary
+    // moment — so the generation is what makes them inert.
+    generation++
     main.removeCallbacks(tick)
     thread?.quitSafely()
     thread = null
@@ -136,7 +148,13 @@ class WindowCapture(
       // A capture failure must never reach the call.
       Log.w(TAG, "window frame failed", e)
     } finally {
-      main.post { scheduleNext() }
+      // Tagged with the run it belongs to. Untagged, a pause landing between this encode finishing
+      // and the hop running left the hop queued; `start()` then set `running` back to true and
+      // posted its own tick, and this one posted a SECOND alongside it. Two chains at ~3 fps then
+      // raced on the single `bitmap` — a PixelCopy write overlapping a compress read — which is
+      // precisely what the header of this class says cannot happen.
+      val gen = generation
+      main.post { if (gen == generation) scheduleNext() }
     }
   }
 
