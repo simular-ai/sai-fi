@@ -131,6 +131,19 @@ class ConversationHarness(
    */
   suspend fun deliverAgentEvent(event: AgentEvent) = onAgentEvent(event)
 
+  /**
+   * Leave a photo on the bridge for whatever writes next — what a real capture does when it lands.
+   *
+   * The stash belongs to the next write, which is exactly the immediate path's rule: the adapter
+   * drains it on `forwardTask`. A held task takes its photos with it instead (see
+   * `takePendingAttachments`), which is why a queued request cannot end up carrying someone else's.
+   */
+  fun stashAttachment(attachment: com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.TaskAttachment) =
+      bridge.addPendingAttachment(attachment)
+
+  /** Let the presenter show a beat of silence, when one is what a person would hear. */
+  fun beat(ms: Long) = presenter?.pause(ms)
+
   val concierge =
       Concierge(
           agent = bridge,
@@ -165,7 +178,7 @@ class ConversationHarness(
   suspend fun user(utterance: String) {
     lastUserSpeechAt = clock.now
     transcript += Line("you", utterance)
-    presenter?.turn("you", utterance)
+    presenter?.speak("you", utterance)
     gate.onUserTranscript(utterance)
     modelTurn(utterance)
   }
@@ -222,13 +235,26 @@ class ConversationHarness(
     if (!turn.speech.isNullOrBlank()) {
       runGate(gate.onSaiTranscript(turn.speech))
       transcript += Line("sai", turn.speech)
-      presenter?.turn("sai", turn.speech)
+      presenter?.speak("sai", turn.speech)
     }
     routeCalls(turn.calls)
     // The turn ends after the model has finished speaking, not instantly: the gap is the window in
     // which a completion landing mid-sentence is held, which is the race worth testing.
-    clock.scheduleSuspending(if (turn.speech.isNullOrBlank()) 0 else speakingMs) {
+    //
+    // WHICH clock matters, and getting it wrong is silent. A live transport delivers on real time and
+    // nothing advances the virtual one, so scheduling the turn end there meant it never fired:
+    // `modelSpeaking` stayed true for the rest of the call and every nudge was deferred behind a turn
+    // that would never end. The model looked mute when it had simply never been told anything — the
+    // same shape as the bug LiveTurnGate was extracted for, reproduced in the harness, and it spoiled
+    // a live demo before the cause was spotted.
+    val speakFor = if (turn.speech.isNullOrBlank()) 0L else speakingMs
+    if (transport != null) {
+      kotlinx.coroutines.delay(speakFor)
       runGate(gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true))
+    } else {
+      clock.scheduleSuspending(speakFor) {
+        runGate(gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true))
+      }
     }
   }
 

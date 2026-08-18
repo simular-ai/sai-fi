@@ -67,6 +67,36 @@ class PresenterPublisher(url: String, private val paceMs: Long) {
   fun turn(role: String, text: String) =
       send(JSONObject().put("t", "turn").put("id", nextId++).put("role", role).put("text", text))
 
+  /**
+   * Publish a turn the way a real one arrives: one id, growing a word at a time.
+   *
+   * A real call's transcript is a stream of deltas, so the presenter renders a line filling in as it
+   * is spoken. Publishing a finished sentence in a single frame is the tell that a rig is driving it
+   * — the words appear all at once, at machine speed, and no one is fooled. This paces at ordinary
+   * speech (~150 wpm by default) so a recording of the harness looks like a recording of a call.
+   *
+   * Deliberately not pretending to be a perfect impression: the delta boundaries here are words,
+   * whereas a real model streams whatever chunk the API hands over. What matters is the cadence.
+   */
+  fun speak(role: String, text: String, wordsPerMinute: Int = 150) {
+    val id = nextId++
+    val words = text.split(' ').filter { it.isNotEmpty() }
+    if (words.isEmpty()) return
+    val perWord = (60_000L / wordsPerMinute).coerceAtLeast(1)
+    val sb = StringBuilder()
+    for ((i, w) in words.withIndex()) {
+      if (i > 0) sb.append(' ')
+      sb.append(w)
+      ws?.send(JSONObject().put("t", "turn").put("id", id).put("role", role).put("text", sb.toString()).toString())
+      // A touch longer after a comma or a full stop, which is where a speaker actually breathes.
+      val pause = if (w.endsWith(",") || w.endsWith(".") || w.endsWith("?")) perWord * 2 else perWord
+      Thread.sleep(pause)
+    }
+  }
+
+  /** A silence, for the gaps a conversation actually has. */
+  fun pause(ms: Long) = Thread.sleep(ms)
+
   fun log(text: String) =
       send(JSONObject().put("t", "log").put("id", nextId++).put("text", text))
 

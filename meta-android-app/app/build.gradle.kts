@@ -199,13 +199,16 @@ tasks.withType<Test>().configureEach {
           // Mirroring a harness conversation to the presenter, so a test can be watched.
           "SAI_PRESENTER",
           "SAI_PRESENTER_PACE_MS",
+          // The demo flow, which drives a real agent from a real model.
+          "SAI_DEMO",
       )
       .forEach { name -> System.getenv(name)?.let { environment(name, it) } }
   // The eval's output IS its result — a scorecard, not an assertion count — so it has to reach the
   // terminal. Only while it is running: on the ordinary suite this would bury 285 tests in noise.
   // (A full run makes dozens of model calls and waits out per-minute rate limits between them, so it
   // takes minutes. Gradle sets no default test timeout, so there is nothing to raise.)
-  if (System.getenv("SAI_CONVERSATION_EVAL") == "1" || System.getenv("SAI_PRESENTER") == "1") {
+  if (System.getenv("SAI_CONVERSATION_EVAL") == "1" || System.getenv("SAI_PRESENTER") == "1" ||
+      System.getenv("SAI_DEMO") == "1") {
     testLogging { showStandardStreams = true }
   }
 }
