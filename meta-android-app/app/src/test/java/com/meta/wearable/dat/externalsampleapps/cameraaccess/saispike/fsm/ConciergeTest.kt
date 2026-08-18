@@ -304,15 +304,34 @@ class ConciergeTest {
   @Test
   fun `a model-enqueued task has no durable doc, so the drain does start it`() = runTest {
     val c = concierge()
+    engine.script = { _, _ -> listOf(Effect.ForwardToAgent("first task")) }
+    c.handleUserUtterance("do the first thing")
+
     engine.script = { _, _ -> listOf(Effect.Enqueue("later thing", Urgency.NORMAL)) }
     c.handleUserUtterance("do that later")
-    assertTrue(agent.calls.isEmpty())
+    assertEquals("held behind the running task", 1, agent.callsTo("forwardTask").size)
 
     engine.script = { _, _ -> emptyList() }
     c.handleAgentEvent(AgentEvent.Complete())
 
-    assertEquals(listOf("later thing"), agent.callsTo("forwardTask").map { it.args["text"] })
+    assertEquals(
+        listOf("first task", "later thing"), agent.callsTo("forwardTask").map { it.args["text"] })
     assertTrue(c.getState().queue.isEmpty())
+  }
+
+  @Test
+  fun `an enqueue with nothing running starts it, rather than parking it forever`() = runTest {
+    // The model calls enqueue because it believes something is running. When that belief is wrong —
+    // the running task completed in the gap between the model deciding and its effect arriving — the
+    // queue had no way of ever being drained: the drain hung off `handleAgentEvent`, and with no turn
+    // in flight no agent event was ever coming. The task sat in the queue for the rest of the call,
+    // after the user had been told it was next.
+    val c = concierge()
+    engine.script = { _, _ -> listOf(Effect.Enqueue("book a table", Urgency.NORMAL)) }
+    c.handleUserUtterance("also book a table")
+
+    assertEquals(listOf("book a table"), agent.callsTo("forwardTask").map { it.args["text"] })
+    assertTrue("nothing left waiting", c.getState().queue.isEmpty())
   }
 
   // ── dispatch ordering ──────────────────────────────────────────────────────

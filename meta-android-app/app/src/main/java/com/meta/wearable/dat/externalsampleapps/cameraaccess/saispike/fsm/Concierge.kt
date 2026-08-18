@@ -171,6 +171,13 @@ class Concierge(
    */
   private suspend fun applyEffects(effects: List<Effect>) {
     for (effect in effects) applyEffect(effect)
+    // Every entry point reaches the queue through here, which is why the drain is here and not at
+    // the three call sites. It used to hang off `handleAgentEvent` alone, so an `enqueue` decided by
+    // the model while nothing was running — no turn in flight, therefore no agent event ever coming
+    // — appended to `state.queue` and stopped there, permanently, after the user had been told it
+    // was next. That is the invariant below stated as a bug: a path that leaves `mode` at IDLE and
+    // does not drain.
+    maybeDrainQueue()
     publishSessionState()
   }
 
