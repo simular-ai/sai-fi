@@ -40,6 +40,33 @@ import org.json.JSONObject
 object VoiceChannelClient {
 
   /**
+   * The channel this client speaks as, named on every request that has a per-channel answer.
+   *
+   * `cli` and `api` are separate conversations on the server — the dedicated-session key is
+   * `{uid}_{machineId}_{channel}` — and the three routes that resolve one (`POST /new-session`,
+   * `GET /context`, `GET /sessions`) DEFAULT AN ABSENT `channel` TO `cli`, because `cli` was the only
+   * programmatic channel when they were written and an old CLI must keep working. Nothing errors when
+   * it is omitted; the answer is simply about somebody else's conversation.
+   *
+   * A constant rather than a literal per call site because the omission has already happened twice
+   * over: `resetSession` here rotated the TERMINAL's session on a spoken "start fresh", while the
+   * per-call mint in [VoiceSession] named the channel correctly — two paths to the same endpoint,
+   * disagreeing. `POST /message` needs none of this: that route is per-channel by URL — the
+   * `/v1/agents` mount is `api`, `/v1/cli` is `cli` — so a send always lands in this client's own
+   * conversation.
+   */
+  const val API_CHANNEL = "api"
+
+  /**
+   * The body for `POST /v1/agents/new-session` — rotate THIS client's conversation.
+   *
+   * Shared by both callers so neither can forget the channel: the FSM's `resetSession` (the user
+   * saying "start fresh") and the per-call session mint.
+   */
+  fun newSessionBody(machineId: String): JSONObject =
+      JSONObject().put("machineId", machineId).put("channel", API_CHANNEL)
+
+  /**
    * Send a message and hand back its turn's event stream, once the agent has accepted it.
    *
    * Deliberately TWO steps rather than one suspending call. `forwardTask` runs inside the FSM's

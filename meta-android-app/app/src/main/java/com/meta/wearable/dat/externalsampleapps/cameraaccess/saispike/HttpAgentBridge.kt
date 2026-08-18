@@ -134,10 +134,15 @@ class HttpAgentBridge(
    *
    * A 429 is the rate limit, and it is worth telling apart from a failure: "you've done this a lot
    * lately" and "it broke" need different things said to the user.
+   *
+   * The body comes from [VoiceChannelClient.newSessionBody] rather than being built here, because
+   * built here it forgot the `channel` — and the route defaults an absent one to `cli`, so a user
+   * saying "start fresh" rotated the TERMINAL's conversation and left this one exactly where it was,
+   * poison and all. Nothing failed; the rotation just happened to somebody else.
    */
   override suspend fun resetSession(): ResetOutcome =
       try {
-        transport.post("new-session", JSONObject().put("machineId", machineId))
+        transport.post("new-session", VoiceChannelClient.newSessionBody(machineId))
         ResetOutcome.OK
       } catch (e: ConciergeHttpException) {
         if (e.status == 429) ResetOutcome.RATE_LIMITED else ResetOutcome.FAILED

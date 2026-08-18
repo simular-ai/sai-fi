@@ -102,10 +102,13 @@ object ConciergeClient {
   ): String =
       withContext(Dispatchers.IO) {
         val conn =
-            // `channel=api` for the same reason the rotation names it: the route defaults to
-            // `cli`, so recall without it answers from the TERMINAL's transcript — a conversation
-            // this client has never taken part in.
-            (URL("$baseUrl/v1/agents/context?machineId=$machineId&limit=$limit&channel=api")
+            // `channel` for the same reason the rotation names it: the route defaults to `cli`, so
+            // recall without it answers from the TERMINAL's transcript — a conversation this client
+            // has never taken part in. Same constant as the POST bodies; see
+            // [VoiceChannelClient.API_CHANNEL].
+            (URL(
+                        "$baseUrl/v1/agents/context?machineId=$machineId&limit=$limit" +
+                            "&channel=${VoiceChannelClient.API_CHANNEL}")
                     .openConnection()
                     as HttpURLConnection)
                 .apply {

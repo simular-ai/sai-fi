@@ -132,6 +132,27 @@ class HttpAgentBridgeTest {
     assertTrue(t.posts.all { it.second.getString("machineId") == "m1" })
   }
 
+  @Test
+  fun `reset names the api channel, so it rotates OUR conversation and not the terminal's`() =
+      runBlocking {
+        // The bug this pins: the route defaults an absent `channel` to `cli`, and this body was built
+        // without one. So a user saying "start fresh" rotated the TERMINAL's session while this
+        // client's kept growing — nothing failed, the rotation just landed on somebody else's
+        // conversation, which is why it survived every attempt to reset away from a poisoned one.
+        val t = RecordingTransport()
+        bridge(t).resetSession()
+        assertEquals("api", t.posts.single().second.getString("channel"))
+      }
+
+  @Test
+  fun `abort needs no channel — it is about the machine, not a conversation`() = runBlocking {
+    // Not an oversight to be "fixed" later: /abort stops whatever that machine is running. There is
+    // no per-channel answer for it, and sending one would imply there is.
+    val t = RecordingTransport()
+    bridge(t).abort()
+    assertTrue("abort must not name a channel", !t.posts.single().second.has("channel"))
+  }
+
   // ── approvals ──────────────────────────────────────────────────────────────
 
   @Test

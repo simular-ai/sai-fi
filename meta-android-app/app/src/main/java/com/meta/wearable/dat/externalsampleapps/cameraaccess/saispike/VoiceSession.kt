@@ -153,9 +153,7 @@ class VoiceSession(
                 baseUrl,
                 token(),
                 "new-session",
-                // `channel` is required, not cosmetic: the route defaults to `cli`, so omitting it
-                // rotates the TERMINAL's conversation and leaves this one exactly where it was.
-                JSONObject().put("machineId", machineId).put("channel", "api"))
+                VoiceChannelClient.newSessionBody(machineId))
           }
           .onFailure {
             onLog("[voice] kept the previous session — could not start a fresh one (${it.message})")
