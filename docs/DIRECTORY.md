@@ -174,16 +174,32 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 
 ### Tests — `app/src/test/java/…/saispike/`
 
-Fast JVM unit tests (23 classes, 245 tests, no device/emulator needed). Three kinds:
+306 JVM tests, no device or emulator needed — everything below runs on `./gradlew
+:app:testDebugUnitTest` except the three tiers that cost money, which are gated on an environment
+variable and skip themselves otherwise. Five kinds:
 
 - **`*Test.kt`** — behaviour tests for one class each (`GlassesLinkTest`, `HangupPolicyTest`,
   `ReconnectPolicyTest`, `GreetingGateTest`, `HeldNudgeQueueTest`, `MachineSwitcherTest`,
-  `AgentEventRouterTest`, `ActivityLogTest`, `ConciergeProtocolTest`,
-  `CallNotificationTextTest`, `PresenterSocketTest`, `AskFirstStepperTest`, `ui/SaiTabTest`).
+  `AgentEventRouterTest`, `ActivityLogTest`, `ConciergeProtocolTest`, `LiveTurnGateTest`,
+  `VoiceChannelClientTest`, `HttpAgentBridgeTest`, `CallNotificationTextTest`, `PresenterSocketTest`,
+  `AskFirstStepperTest`, `ui/SaiTabTest`).
 - **`*ParityTest.kt`** — replay a shared fixture to prove the Kotlin port matches the server
   (`ConciergeProtocolParityTest`, `ActivityLogParityTest`).
 - **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 59 scenarios ported from the
   server's catalog, each naming the failure it prevents.
+- **`conversation/`** — the closed loop, with everything real except the brain and the agent: a fake
+  brain's tool calls go through the real `LiveTurnGate`, `Concierge` and `HttpAgentBridge` to a
+  `ScriptedAgent` that implements `VoiceTransport`, the seam *under* the bridge — so a wire bug has
+  nowhere to hide. `BargeInConversationTest` and `QueueConversationTest` cover the two hardest paths,
+  `LongConversationTest` the state that only accumulates, and `TimingMatrixTest` replays one
+  conversation at seven speeds asserting invariants rather than orderings, because every barge-in ⇄
+  queue bug on record is a race. `PresenterPublisher` can mirror a harness run to the dashboard.
+- **The paid tiers** — off by default, each behind its own switch: `LiveAgentTest` /
+  `SummaryFixLiveTest` (`SAI_LIVE_AGENT=1`) drive a real cloud-api to catch **contract drift** and
+  nothing else; `eval/LoopEvalTest` (`SAI_CONVERSATION_EVAL=1`) runs the real model through the real
+  FSM and grades the transcript against the rubric ported in `eval/Judge.kt`; `DemoFlowTest`
+  (`SAI_DEMO=1`) drives a real model and a real agent end to end, paced for the presenter so a demo
+  can be rehearsed without hardware.
 
 ---
 
@@ -196,4 +212,5 @@ DEBUG builds.
 | --- | --- |
 | `server.ts` | The dashboard server (receives the DEBUG presenter feed). |
 | `public/index.html` | The dashboard page. |
+| `watch.mjs` | A terminal watcher for the same feed — the dashboard without a browser. |
 | `package.json`, `package-lock.json`, `tsconfig.json` | Node project config. |

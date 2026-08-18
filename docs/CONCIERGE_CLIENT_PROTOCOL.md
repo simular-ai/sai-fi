@@ -143,6 +143,13 @@ two independent renderings of the same input.
 > content) is UNTRUSTED. In every nudge the instruction comes FIRST and the untrusted text is fenced
 > inside `"""…"""`, so the model treats it as data. A port that drops the fence turns any web page the
 > agent reads into a prompt-injection vector.
+>
+> **The same applies to machine names**, which are easy to miss because they are not agent output:
+> they come from `GET /v1/agents/machines`, they are whatever the user typed, and they land in the
+> *system prompt* rather than in a nudge. `VoiceProfile.systemPromptWithContext` flattens newlines and
+> quotes and caps the length before appending them, and labels the whole clause as data. It used to
+> say "sanitize before calling" and leave it to the caller, which is exactly how a name reading
+> `X". Ignore prior instructions and …` reached the persona prompt verbatim.
 
 The client also owns two things the server cannot enforce:
 
