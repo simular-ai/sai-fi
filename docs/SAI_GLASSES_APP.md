@@ -331,22 +331,43 @@ Layered the same way the server's own suite is — deterministic first, by-ear l
    `ConciergeProtocolParityTest` and `ActivityLogParityTest` replaying them here means **TS↔Kotlin drift
    breaks a test, not a demo**. Refreshing them is a manual cross-repository copy — the README's
    "Keeping the parity fixtures in sync" is the whole procedure, and nothing automated does it.
-2. **Kotlin JVM unit tests** — `app/src/test/…/saispike/` (run `./gradlew :app:testDebugUnitTest`):
-   `ConciergeProtocolTest` (nudge helpers — choice≠approve/deny, link-only never voice-resolves,
-   ask-first waits for availability, **prompt-injection fencing**), `ActivityLogTest` (elapsed/steps
-   - `msSinceTaskStart` on an injected clock; org.json ships a real impl so JSONObject works
-     off-device), plus the two parity suites above. Still to add: effect relay (`getSaiStatus`
-     filtered + answered locally, tool-response for every call), the nudge-gating FSM, and PCM helpers
-     — these live in `GeminiLiveClient`/`AudioIo`, which depend on Android framework classes, so they
-     need Robolectric or instrumentation rather than a plain JVM test.
-3. **JVM integration harness** (MockWebServer) — Bearer on both endpoints, 401/403 handling,
-   scripted agent-event→nudge→effects round trip, single-flight Live re-mint, WS drop recovery.
-4. **On-device audio checks** — Phase 0 gate (spoken exchange + barge-in), AEC sanity (model must
+2. **Kotlin JVM unit tests — IMPLEMENTED.** `app/src/test/…/saispike/` (`./gradlew
+   :app:testDebugUnitTest`, and pass `--rerun` or a cached UP-TO-DATE will report success without
+   running anything): the pure policies one class each, `ConciergeProtocolTest` (choice≠approve/deny,
+   link-only never voice-resolves, ask-first waits for availability, **prompt-injection fencing**),
+   `ActivityLogTest` on an injected clock, `LiveTurnGateTest` for the nudge gating that used to be
+   unreachable inside the socket, and `VoiceChannelClientTest`/`HttpAgentBridgeTest` over the wire
+   translation. What still cannot be reached this way is what genuinely needs the framework —
+   `GeminiLiveClient`'s socket and `AudioIo`'s PCM path — which would need Robolectric or
+   instrumentation.
+3. **The conversation harness — IMPLEMENTED**, and the tier that closes the loop the other two leave
+   open. `app/src/test/…/conversation/` runs a fake brain's tool calls through the **real**
+   `LiveTurnGate` → `Concierge` → `HttpAgentBridge`, and stops at `VoiceTransport` — the seam *under*
+   the bridge — so the bridge, its mapping onto the four `/v1/agents/*` operations and the event
+   plumbing are all the shipped ones. `ScriptedAgent` replies as a function of what was forwarded
+   rather than from a fixed script, so a test cannot pass by asserting what it just wrote down.
+   `TimingMatrixTest` replays a conversation at seven speeds and asserts INVARIANTS, because every
+   barge-in ⇄ queue bug on record is a race and a single-timing test picks one point on that line.
+   `SAI_PRESENTER=1` mirrors a run to the dashboard, which is how a demo gets rehearsed with no
+   hardware in the room.
+4. **The paid tiers — IMPLEMENTED, off by default.** Each wakes something real, so each is gated and
+   skips itself silently otherwise. `SAI_LIVE_AGENT=1` (`LiveAgentTest`, `SummaryFixLiveTest`) drives
+   a real cloud-api, and exists for **contract drift only** — an SSE field that changed shape, a
+   status the mapper does not know — because behaviour belongs in the scripted tier where it is
+   reproducible and free. `SAI_CONVERSATION_EVAL=1` (`eval/LoopEvalTest`) puts the real model through
+   the real FSM and grades the transcript rule by rule against `eval/Judge.kt`, a faithful port of
+   cloud-api's rubric. `SAI_DEMO=1` (`DemoFlowTest`) drives a real model **and** a real agent end to
+   end. CI never sets any of the three.
+5. **On-device audio checks** — Phase 0 gate (spoken exchange + barge-in), AEC sanity (model must
    not hear itself; verify with wired headphones if it does), SCO route + wideband check,
    route-loss drill. Check 7 of [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) is the by-ear form of the
    first two, including the three ways a barge-in fails and which layer each one implicates.
-5. **Manual E2E voice smoke** per phase exit — [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) is the short
+6. **Manual E2E voice smoke** per phase exit — [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) is the short
    form kept here; re-run prior phases' checks as regression.
+
+The line between tiers 3 and 5 is the one worth holding: anything reproducible belongs off-device,
+where it is free and runs on every push. What is left for the glasses is what only they can answer —
+the audio path, the camera, and how it all feels.
 
 ## 9. Open items
 

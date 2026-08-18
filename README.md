@@ -61,9 +61,28 @@ cd meta-android-app && ./gradlew :app:testDebugUnitTest --rerun
 
 `--rerun` matters. Without it the test task reports `UP-TO-DATE` from cache and verifies nothing.
 
-CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 239 JVM tests,
-including the 62-scenario FSM golden catalog and the cross-port parity tests below. On-device and
-by-ear checks are still manual.
+CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 306 JVM tests,
+including the 59-scenario FSM golden catalog, the cross-port parity tests below, and the conversation
+harness that drives a fake brain through the real gate, FSM and bridge down to a scripted agent. On-device
+and by-ear checks are still manual: [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md).
+
+Three further tiers wake something real, so they are **off unless you ask for them** and cost money
+when you do. CI never sets any of these:
+
+```bash
+# contract drift against a real cloud-api — an SSE field that changed shape, a status we don't map
+SAI_LIVE_AGENT=1 ./gradlew :app:testDebugUnitTest --tests "*LiveAgent*" --rerun
+
+# the real model through the real FSM, graded against the rubric (a full run takes minutes)
+SAI_CONVERSATION_EVAL=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*LoopEvalTest*" --rerun
+
+# a real model AND a real agent, end to end; add SAI_PRESENTER=1 to watch it in the dashboard
+SAI_DEMO=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*DemoFlowTest*" --rerun
+```
+
+`--rerun` is not optional for any of them: Gradle does not treat environment variables as task
+inputs, so a second run with different settings is UP-TO-DATE and reports success without running
+anything — which looks exactly like a fast green run.
 
 ## Running it
 
