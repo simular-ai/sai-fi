@@ -243,23 +243,24 @@ val GOLDEN_SCENARIOS: List<Scenario> =
             },
         ),
         Scenario(
-            name = "S7 approveAlways",
-            guards = "approved_always resolution",
+            name = "S7 a stray approveAlways approves ONCE",
+            // This scenario used to assert an `approved_always` resolution, and that was the bug: the
+            // server retired the Grant (cloud-api ADR 0014) and folds `response: "always"` into a
+            // one-time approve, so the FSM was sending a decision that silently did something else
+            // while the prompt told the user their approval would persist. The tool is gone; what is
+            // pinned now is the graceful degradation, because a Live model can still improvise the
+            // name and the card must not be left pending.
+            guards = "approveAlways folds to a one-time approve, never left pending",
             steps =
                 listOf(
                     effects(effect("forwardToAgent", "text" to "run some js")),
                     Step.Agent(
-                        approval(
-                            "ap3",
-                            approvalType = "exec",
-                            allowAlways = true,
-                            title = "run some JavaScript")),
+                        approval("ap3", approvalType = "exec", title = "run some JavaScript")),
                     effects(effect("approveAlways")),
                 ),
             assert = { ctx ->
               assertEquals("ap3", ctx.resolveCall()?.args?.get("id"))
-              assertEquals(
-                  ApprovalDecision.APPROVED_ALWAYS, ctx.resolveCall()?.args?.get("decision"))
+              assertEquals(ApprovalDecision.APPROVED, ctx.resolveCall()?.args?.get("decision"))
               assertNull(ctx.state.pendingApprovalId)
             },
         ),

@@ -333,7 +333,7 @@ private fun parseApprovalRequest(data: JSONObject): AgentEvent.ApprovalRequest? 
       description = data.optString("description"),
       approvalType = data.optString("approvalType"),
       isLinkOnly = data.optBoolean("isLinkOnly", false),
-      allowAlways = data.optBoolean("allowAlways", false),
+      // No `allowAlways` read — the frame has never carried one. See `Effect.Approve`.
       options = flat,
       // Only when it actually asks more than one thing. For a single question the flat list IS the
       // grouping, and carrying a redundant copy is one more thing that can disagree with itself.

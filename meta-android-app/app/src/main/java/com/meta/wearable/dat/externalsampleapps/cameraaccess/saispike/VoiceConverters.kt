@@ -39,7 +39,6 @@ fun agentEventToJson(e: AgentEvent): JSONObject =
               .put("description", e.description)
               .put("approvalType", e.approvalType)
               .put("isLinkOnly", e.isLinkOnly)
-              .put("allowAlways", e.allowAlways)
               .apply {
                 e.options?.let { opts ->
                   put(

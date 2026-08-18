@@ -35,9 +35,16 @@ sealed interface Effect {
   /** Steer the running turn — an answer or a correction, not new work. */
   data class RelayToAgent(val answer: String) : Effect
 
+  /**
+   * Approve the pending request, once.
+   *
+   * There is no `ApproveAlways` beside this any more. It resolved with `response: "always"`, which
+   * the server folds into exactly this — the `approved_always` Grant it used to write is retired
+   * (cloud-api ADR 0014). So the effect existed to make a promise nothing kept: the model offered to
+   * stop asking, the card was approved once, and the next identical request interrupted the user
+   * again. `parseEffect` folds a stray `approveAlways` here rather than dropping it.
+   */
   data object Approve : Effect
-
-  data object ApproveAlways : Effect
 
   /**
    * `reason` is parsed and then never used — the agent is told `denied` and nothing else. Kept
@@ -90,7 +97,12 @@ fun parseEffect(raw: JSONObject?): Effect? {
     "forwardToAgent" -> raw.str("text")?.let { Effect.ForwardToAgent(it) }
     "relayToAgent" -> raw.str("answer")?.let { Effect.RelayToAgent(it) }
     "approve" -> Effect.Approve
-    "approveAlways" -> Effect.ApproveAlways
+    // Folded, not rejected. The tool is no longer declared and the prompt no longer names it, but a
+    // Live model improvises, and the two outcomes do not cost the same: folding resolves the card
+    // once — exactly what the server does with `response: "always"` — while returning null leaves
+    // the approval pending and the model waiting on a decision it believes it made. The user gets
+    // their approval either way; only the promise to stop asking is gone.
+    "approveAlways" -> Effect.Approve
     "chooseOption" -> {
       // Non-strings and empty strings are filtered out rather than rejecting the call; null only
       // when nothing survives. A partly-malformed pick list still resolves what it can.

@@ -1,6 +1,6 @@
 /* sai-fi — voice concierge. */
 
-// approve / approveAlways / deny / chooseOption.
+// approve / deny / chooseOption.
 //
 // The security invariant is here: a pick must be an option that was actually offered. The selection
 // is handed to the agent as the user's TRUSTED choice, so a value that was never on the table —
@@ -33,7 +33,6 @@ suspend fun applyApprovalDecision(ctx: EffectCtx, effect: Effect) {
   val decision =
       when (effect) {
         is Effect.Deny -> ApprovalDecision.DENIED
-        is Effect.ApproveAlways -> ApprovalDecision.APPROVED_ALWAYS
         else -> ApprovalDecision.APPROVED
       }
 

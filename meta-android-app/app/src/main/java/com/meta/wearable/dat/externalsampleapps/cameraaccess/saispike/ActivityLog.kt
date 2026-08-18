@@ -94,10 +94,15 @@ class ActivityLog(
   private fun isRunning(): Boolean = startedAt != null && endedAt == null
 
   private fun begin() {
+    // A fresh task begins when work starts and none is currently running.
     if (startedAt == null || endedAt != null) {
       startedAt = now()
       endedAt = null
       steps = 0
+      // The block belonged to the task that just ended. Carrying it into a new one makes statusText()
+      // lead with a question about work nobody is doing any more — see the 'approval-resolved' case
+      // for why a stale block is worse than no block at all.
+      blockedOn = null
     }
   }
 
@@ -117,11 +122,33 @@ class ActivityLog(
       }
       "status" -> {
         val s = e.optString("status")
-        if (s == "idle" || s == "error") end() else begin()
+        // `aborting` is a task ENDING, not one starting, and it is not on the begin() side even
+        // though it is not terminal either. Treated as work starting, an abort that arrives after the
+        // task already finished cleared the end time and zeroed the step count, so statusText()
+        // answered "Still working — 0 step(s) done so far" about a task being cancelled: running when
+        // nothing is, and no history to show for it. Left as-is until it lands — the abort may not
+        // take, and idle/error/complete all follow it and do the ending properly.
+        if (s == "idle" || s == "error") end() else if (s != "aborting") begin()
       }
       "progress" -> {
         begin()
         steps++
+      }
+      // The question has an answer, however it arrived — the user may have resolved it in the desktop
+      // app, or it may have timed out. Either way the agent is no longer parked on it.
+      //
+      // Cleared here rather than waiting for the next `session-state`, because that event is the
+      // server volunteering its picture and nothing guarantees one follows a resolution. Until it
+      // does, statusText() keeps leading with "BLOCKED ON THE USER — nothing is progressing until they
+      // answer" about a question they have already answered, and suppresses the "Still working" line
+      // entirely. That is the 2026-07-31 honesty failure inverted: blaming the user for a wait that is
+      // over.
+      //
+      // Not matched on the id: `session-state.blockedOn` carries the question TEXT, not the approval
+      // id, so there is nothing to correlate against. Any resolution clears the block, and the next
+      // `session-state` re-asserts one if the server still sees it.
+      "approval-resolved" -> {
+        blockedOn = null
       }
       "complete",
       "error" -> end()
@@ -144,6 +171,15 @@ class ActivityLog(
             else e.optString("text")
         "text" -> e.optString("text")
         "approval-request" -> "needs you: ${e.optString("title")}"
+        // The counterpart to 'needs you:' above. Without it the buffer keeps an unanswered-looking
+        // question in the scrollback forever, which reads as still-pending even after statusText() has
+        // correctly stopped calling the task blocked. Carries no title — the event has only an id —
+        // but it always follows the 'needs you:' line that names it.
+        "approval-resolved" ->
+            e.optString("status").let { s ->
+              if (s == "timeout" || s == "expired") "stopped waiting for that request"
+              else "that request was answered ($s)"
+            }
         "complete" -> "finished" + summarySuffix(e)
         "error" -> "error: ${e.optString("text")}"
         "notice" -> "note: ${e.optString("text")}"

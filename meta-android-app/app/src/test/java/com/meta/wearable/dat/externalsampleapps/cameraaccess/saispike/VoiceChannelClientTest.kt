@@ -99,8 +99,11 @@ class VoiceChannelClientTest {
   fun `an approval-request carries its options, and absent flags stay absent`() {
     val e =
         parseAgentEvent(
+            // `allowAlways` rides along to prove it is IGNORED rather than merely unsent: the server
+            // has not carried the field since ADR 0014, and a client that reads one back into an
+            // affordance is the failure this parse must not have.
             """{"type":"data-approval-request","data":{"approvalId":"a1","title":"Which?",
-               "description":"d","approvalType":"choice","isLinkOnly":false,"allowAlways":false,
+               "description":"d","approvalType":"choice","isLinkOnly":false,"allowAlways":true,
                "options":[{"value":"sms","label":"Text"},{"value":"app","label":"App"}]}}""")
             as AgentEvent.ApprovalRequest
 

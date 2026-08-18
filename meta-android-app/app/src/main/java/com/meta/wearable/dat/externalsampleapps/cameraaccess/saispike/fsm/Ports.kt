@@ -46,7 +46,10 @@ sealed interface AgentEvent {
       val description: String,
       val approvalType: String,
       val isLinkOnly: Boolean,
-      val allowAlways: Boolean,
+      // No `allowAlways`. The server never sent one — `data-approval-request` stopped carrying it
+      // when cloud-api ADR 0014 retired the `approved_always` Grant — so this field was read from an
+      // absent key, defaulted to false, and then gated a prompt line offering to stop the asking.
+      // See `Effect.Approve`.
       /** Present for `select` approvals — every option across every question, flattened. */
       val options: List<ApprovalOption>? = null,
       /**
@@ -103,12 +106,15 @@ sealed interface AgentEvent {
 /**
  * How the concierge resolves a pending approval.
  *
- * The wire values are the agent API's `response` field, which is a plain yes/no/always — not the
- * `approved` / `denied` status the approval doc ends up carrying.
+ * The wire values are the agent API's `response` field, which is a plain yes/no — not the `approved`
+ * / `denied` status the approval doc ends up carrying.
+ *
+ * `always` is gone. The endpoint still accepts it and folds it into a one-time approve, which is
+ * precisely why sending it was wrong: the call succeeded, nothing persisted, and the user had been
+ * told the asking would stop.
  */
 enum class ApprovalDecision(val wire: String) {
   APPROVED("yes"),
-  APPROVED_ALWAYS("always"),
   DENIED("no"),
 }
 

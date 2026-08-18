@@ -74,7 +74,6 @@ class VoiceProfileTest {
             "relayToAgent",
             "askAndWait",
             "approve",
-            "approveAlways",
             "deny",
             "chooseOption",
             "enqueue",

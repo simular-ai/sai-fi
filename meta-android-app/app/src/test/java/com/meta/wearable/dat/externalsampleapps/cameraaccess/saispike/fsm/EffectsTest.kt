@@ -97,10 +97,17 @@ class EffectsTest {
   @Test
   fun `the payload-free effects parse from kind alone`() {
     assertEquals(Effect.Approve, parseEffect(effect("kind" to "approve")))
-    assertEquals(Effect.ApproveAlways, parseEffect(effect("kind" to "approveAlways")))
     assertEquals(Effect.Interrupt, parseEffect(effect("kind" to "interrupt")))
     assertEquals(Effect.ResetSession, parseEffect(effect("kind" to "resetSession")))
     assertEquals(Effect.Noop, parseEffect(effect("kind" to "noop")))
+  }
+
+  @Test
+  fun `a stray approveAlways folds to a one-time approve rather than being dropped`() {
+    // The tool is gone and the prompt no longer names it, but a Live model improvises names, and
+    // returning null here would leave the card pending and the model waiting on a decision it thinks
+    // it made. Folding matches what the server does with `response: "always"` — approve once.
+    assertEquals(Effect.Approve, parseEffect(effect("kind" to "approveAlways")))
   }
 
   // ── batches ────────────────────────────────────────────────────────────────

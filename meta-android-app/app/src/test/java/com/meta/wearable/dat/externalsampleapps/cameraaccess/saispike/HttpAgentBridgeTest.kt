@@ -155,13 +155,15 @@ class HttpAgentBridgeTest {
   }
 
   @Test
-  fun `the decision is the API's yes-no-always, not the doc's approved-denied`() = runBlocking {
+  fun `the decision is the API's yes-no, not the doc's approved-denied`() = runBlocking {
+    // `always` used to be the third value here. The endpoint still accepts it and folds it into a
+    // plain approve, which is why sending it was a bug rather than a no-op: the POST succeeded,
+    // nothing persisted, and the user had been promised the asking would stop (cloud-api ADR 0014).
     val t = RecordingTransport()
     val b = bridge(t)
     b.resolveApproval("a1", ApprovalDecision.APPROVED, null)
     b.resolveApproval("a2", ApprovalDecision.DENIED, null)
-    b.resolveApproval("a3", ApprovalDecision.APPROVED_ALWAYS, null)
-    assertEquals(listOf("yes", "no", "always"), t.posts.map { it.second.getString("response") })
+    assertEquals(listOf("yes", "no"), t.posts.map { it.second.getString("response") })
   }
 
   @Test

@@ -116,6 +116,48 @@
     }
   },
   {
+    "name": "aborting after a finished task is not a new task",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000001000,
+          "event": {
+            "type": "progress",
+            "text": "searching",
+            "tool": "web.search"
+          }
+        },
+        {
+          "at": 1700000002000,
+          "event": {
+            "type": "complete",
+            "summary": "Found three."
+          }
+        },
+        {
+          "at": 1700000003000,
+          "event": {
+            "type": "status",
+            "status": "aborting"
+          }
+        }
+      ],
+      "readAt": 1700000004000
+    },
+    "expected": {
+      "statusText": "Finished after 1 step(s).\nRecent activity (oldest first):\nstatus: processing\nsearching (web.search)\nfinished: Found three.\nstatus: aborting",
+      "msSinceTaskStart": 2000
+    }
+  },
+  {
     "name": "error ends the task",
     "input": {
       "maxLines": null,
@@ -367,6 +409,108 @@
     "expected": {
       "statusText": "BLOCKED ON THE USER — 1 step(s) done, then it stopped to ask them: \"CÉ LA VI, or LAVO?\". Nothing is progressing until they answer. The question is YOURS, not a third party's, so never say you're waiting to hear back from anyone else.\nNOT STARTED YET, waiting their turn (1, in order): \"check my unread emails\". The computer runs one task at a time, so these begin only when the current one ends. Describe them as next, never as underway or being worked on.\nRecent activity (oldest first):\nstatus: processing\nsearching (browser)\nneeds you: Which restaurant?",
       "msSinceTaskStart": 3000
+    }
+  },
+  {
+    "name": "a block cleared out of band stops being reported",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000400,
+          "event": {
+            "type": "approval-request",
+            "title": "Which restaurant?"
+          }
+        },
+        {
+          "at": 1700000000500,
+          "event": {
+            "type": "session-state",
+            "running": "book a table",
+            "blockedOn": "CÉ LA VI, or LAVO?",
+            "queued": []
+          }
+        },
+        {
+          "at": 1700000000900,
+          "event": {
+            "type": "approval-resolved",
+            "id": "a1",
+            "status": "approved"
+          }
+        },
+        {
+          "at": 1700000001200,
+          "event": {
+            "type": "progress",
+            "text": "booking the table",
+            "tool": "browser"
+          }
+        }
+      ],
+      "readAt": 1700000002000
+    },
+    "expected": {
+      "statusText": "Still working — 1 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\nstatus: processing\nneeds you: Which restaurant?\nthat request was answered (approved)\nbooking the table (browser)",
+      "msSinceTaskStart": 2000
+    }
+  },
+  {
+    "name": "a block does not survive into the next task",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000200,
+          "event": {
+            "type": "session-state",
+            "running": "book a table",
+            "blockedOn": "Which one?",
+            "queued": []
+          }
+        },
+        {
+          "at": 1700000000400,
+          "event": {
+            "type": "status",
+            "status": "idle"
+          }
+        },
+        {
+          "at": 1700000000900,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000001100,
+          "event": {
+            "type": "progress",
+            "text": "checking the inbox"
+          }
+        }
+      ],
+      "readAt": 1700000002000
+    },
+    "expected": {
+      "statusText": "Still working — 1 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\nstatus: processing\nstatus: idle\nstatus: processing\nchecking the inbox",
+      "msSinceTaskStart": 1100
     }
   },
   {

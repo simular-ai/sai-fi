@@ -58,7 +58,7 @@ fun ingestAgentEvent(
         log(
             "approval-request ${event.id}: type=${event.approvalType} " +
                 "options=${event.options?.size ?: 0} linkOnly=${event.isLinkOnly} " +
-                "allowAlways=${event.allowAlways} allowOther=${event.allowOther == true}")
+                "allowOther=${event.allowOther == true}")
         timers.scheduleApprovalTimeout(event.expiresAt)
         state.copy(
             mode = Mode.AWAITING_USER,

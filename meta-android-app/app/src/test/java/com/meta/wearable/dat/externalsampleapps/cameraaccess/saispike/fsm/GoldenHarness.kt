@@ -111,7 +111,6 @@ fun approval(
     description: String = "",
     approvalType: String = "action",
     isLinkOnly: Boolean = false,
-    allowAlways: Boolean = false,
     options: List<ApprovalOption>? = null,
     multiple: Boolean? = null,
     allowOther: Boolean? = null,
@@ -123,7 +122,6 @@ fun approval(
         description = description,
         approvalType = approvalType,
         isLinkOnly = isLinkOnly,
-        allowAlways = allowAlways,
         options = options,
         multiple = multiple,
         allowOther = allowOther,
@@ -167,7 +165,6 @@ fun agentEventJson(e: AgentEvent): JSONObject =
               .put("description", e.description)
               .put("approvalType", e.approvalType)
               .put("isLinkOnly", e.isLinkOnly)
-              .put("allowAlways", e.allowAlways)
       is AgentEvent.ApprovalResolved ->
           JSONObject().put("type", "approval-resolved").put("id", e.id).put("status", e.status)
       is AgentEvent.SessionState -> sessionStateJson(e)

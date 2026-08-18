@@ -188,7 +188,6 @@ class Concierge(
       is Effect.ForwardToAgent -> applyForwardToAgent(c, effect)
       is Effect.RelayToAgent -> applyRelayToAgent(c, effect)
       is Effect.Approve,
-      is Effect.ApproveAlways,
       is Effect.Deny -> applyApprovalDecision(c, effect)
       is Effect.ChooseOption -> applyChooseOption(c, effect)
       is Effect.Enqueue -> applyEnqueue(c, effect)

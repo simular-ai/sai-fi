@@ -41,7 +41,6 @@ class ConciergeTest {
           description = "Run the script?",
           approvalType = approvalType,
           isLinkOnly = isLinkOnly,
-          allowAlways = false,
           options = options,
           allowOther = allowOther,
           expiresAt = expiresAt,
