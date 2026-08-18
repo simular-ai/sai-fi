@@ -24,6 +24,8 @@ package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
@@ -82,7 +84,15 @@ class PresenterSocket(
     handler.removeCallbacks(reconnectRunnable)
     val gen = ++generation
     runCatching { ws?.cancel() }
-    val url = "$baseUrl/publish" + if (key.isNotBlank()) "?k=$key" else ""
+    // Percent-encoded, because the server reads this with `url.searchParams.get('k')`, which decodes
+    // it — and `watch.mjs` has always sent it through encodeURIComponent. Raw, a key containing `+`
+    // arrived as a space and one containing `&` or `#` truncated the query outright, so the laptop
+    // watcher connected while the phone sat in `presenter: rejected (401 — presenter_key mismatch)`
+    // forever, with the two ends disagreeing about a value the user had typed identically.
+    val url =
+        "$baseUrl/publish" +
+            if (key.isNotBlank()) "?k=${URLEncoder.encode(key, StandardCharsets.UTF_8.name())}"
+            else ""
     ws = runCatching { client.newWebSocket(Request.Builder().url(url).build(), Listener(gen)) }
         .getOrElse {
           Log.w(TAG, "presenter open failed", it)

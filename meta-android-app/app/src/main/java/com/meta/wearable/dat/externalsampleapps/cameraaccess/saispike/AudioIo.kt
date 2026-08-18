@@ -300,15 +300,21 @@ class AudioIo(
     worker?.join(500)
     worker = null
     playQueue.clear()
-    player?.join(500)
+    // Unblock the playback thread BEFORE waiting on it. It can be parked inside a blocking write for
+    // the length of the track buffer (~0.5s) — a stalled SCO link at teardown is the realistic case —
+    // and pausing plus flushing is what makes that write return, so the join below almost always
+    // finds a thread that has already left the native call.
+    track?.let { runCatching { it.pause(); it.flush() } }
+    val playbackFinished = player?.let { it.join(500); !it.isAlive } ?: true
     player = null
     rec?.release()
-    track?.let {
-      runCatching {
-        it.pause()
-        it.flush()
-        it.release()
-      }
+    // …and if it somehow did not, do NOT release underneath it: releasing frees the native track the
+    // thread is still writing to. The runCatching around that write swallows the IllegalStateException,
+    // so the use-after-free was silent — a leaked track on a teardown path is the cheaper of the two.
+    if (playbackFinished) {
+      track?.let { runCatching { it.release() } }
+    } else {
+      Log.w(TAG, "playback thread still in write() at stop — not releasing the track under it")
     }
     track = null
     runCatching { audioManager.removeOnCommunicationDeviceChangedListener(routeListener) }
