@@ -1,0 +1,561 @@
+[
+  {
+    "name": "no task yet",
+    "input": {
+      "maxLines": null,
+      "timeline": [],
+      "readAt": 1700000000000
+    },
+    "expected": {
+      "statusText": "No activity reported yet.",
+      "msSinceTaskStart": null
+    }
+  },
+  {
+    "name": "running: processing + progress",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000001000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000001500,
+          "event": {
+            "type": "progress",
+            "text": "opening browser",
+            "tool": "browser.open"
+          }
+        },
+        {
+          "at": 1700000002500,
+          "event": {
+            "type": "progress",
+            "text": "reading the page"
+          }
+        }
+      ],
+      "readAt": 1700000004000
+    },
+    "expected": {
+      "statusText": "Still working — 2 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\nstatus: processing\nopening browser (browser.open)\nreading the page",
+      "msSinceTaskStart": 3000
+    }
+  },
+  {
+    "name": "finished via status idle",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000001000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000002000,
+          "event": {
+            "type": "progress",
+            "text": "searching",
+            "tool": "web.search"
+          }
+        },
+        {
+          "at": 1700000006000,
+          "event": {
+            "type": "status",
+            "status": "idle"
+          }
+        }
+      ],
+      "readAt": 1700000009000
+    },
+    "expected": {
+      "statusText": "Finished after 1 step(s).\nRecent activity (oldest first):\nstatus: processing\nsearching (web.search)\nstatus: idle",
+      "msSinceTaskStart": 5000
+    }
+  },
+  {
+    "name": "finished via complete with summary",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000001000,
+          "event": {
+            "type": "progress",
+            "text": "drafting reply"
+          }
+        },
+        {
+          "at": 1700000002000,
+          "event": {
+            "type": "complete",
+            "summary": "Sent the email."
+          }
+        }
+      ],
+      "readAt": 1700000005000
+    },
+    "expected": {
+      "statusText": "Finished after 1 step(s).\nRecent activity (oldest first):\nstatus: processing\ndrafting reply\nfinished: Sent the email.",
+      "msSinceTaskStart": 2000
+    }
+  },
+  {
+    "name": "aborting after a finished task is not a new task",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000001000,
+          "event": {
+            "type": "progress",
+            "text": "searching",
+            "tool": "web.search"
+          }
+        },
+        {
+          "at": 1700000002000,
+          "event": {
+            "type": "complete",
+            "summary": "Found three."
+          }
+        },
+        {
+          "at": 1700000003000,
+          "event": {
+            "type": "status",
+            "status": "aborting"
+          }
+        }
+      ],
+      "readAt": 1700000004000
+    },
+    "expected": {
+      "statusText": "Finished after 1 step(s).\nRecent activity (oldest first):\nstatus: processing\nsearching (web.search)\nfinished: Found three.\nstatus: aborting",
+      "msSinceTaskStart": 2000
+    }
+  },
+  {
+    "name": "error ends the task",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000003000,
+          "event": {
+            "type": "error",
+            "text": "network timeout"
+          }
+        }
+      ],
+      "readAt": 1700000008000
+    },
+    "expected": {
+      "statusText": "Finished after 0 step(s).\nRecent activity (oldest first):\nstatus: processing\nerror: network timeout",
+      "msSinceTaskStart": 3000
+    }
+  },
+  {
+    "name": "consecutive duplicate lines collapse",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000100,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000200,
+          "event": {
+            "type": "progress",
+            "text": "step"
+          }
+        },
+        {
+          "at": 1700000000300,
+          "event": {
+            "type": "progress",
+            "text": "step"
+          }
+        }
+      ],
+      "readAt": 1700000001000
+    },
+    "expected": {
+      "statusText": "Still working — 2 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\nstatus: processing\nstep",
+      "msSinceTaskStart": 1000
+    }
+  },
+  {
+    "name": "rolling buffer drops oldest (maxLines=3)",
+    "input": {
+      "maxLines": 3,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000100,
+          "event": {
+            "type": "progress",
+            "text": "one"
+          }
+        },
+        {
+          "at": 1700000000200,
+          "event": {
+            "type": "progress",
+            "text": "two"
+          }
+        },
+        {
+          "at": 1700000000300,
+          "event": {
+            "type": "progress",
+            "text": "three"
+          }
+        },
+        {
+          "at": 1700000000400,
+          "event": {
+            "type": "progress",
+            "text": "four"
+          }
+        }
+      ],
+      "readAt": 1700000000500
+    },
+    "expected": {
+      "statusText": "Still working — 4 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\ntwo\nthree\nfour",
+      "msSinceTaskStart": 500
+    }
+  },
+  {
+    "name": "approval-request line",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000500,
+          "event": {
+            "type": "approval-request",
+            "title": "delete the draft"
+          }
+        }
+      ],
+      "readAt": 1700000001000
+    },
+    "expected": {
+      "statusText": "Still working — 0 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\nstatus: processing\nneeds you: delete the draft",
+      "msSinceTaskStart": 1000
+    }
+  },
+  {
+    "name": "notice before the task starts",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "notice",
+            "text": "The agent is waking up."
+          }
+        },
+        {
+          "at": 1700000040000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        }
+      ],
+      "readAt": 1700000041000
+    },
+    "expected": {
+      "statusText": "Still working — 0 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\nnote: The agent is waking up.\nstatus: processing",
+      "msSinceTaskStart": 1000
+    }
+  },
+  {
+    "name": "a task running with another queued behind it",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000500,
+          "event": {
+            "type": "progress",
+            "text": "opening the inbox",
+            "tool": "browser"
+          }
+        },
+        {
+          "at": 1700000000900,
+          "event": {
+            "type": "session-state",
+            "running": "check my unread emails",
+            "queued": [
+              "book a table for tonight"
+            ]
+          }
+        }
+      ],
+      "readAt": 1700000002000
+    },
+    "expected": {
+      "statusText": "Still working — 1 step(s) done so far. You have no estimate of how much longer; don't invent one.\nNOT STARTED YET, waiting their turn (1, in order): \"book a table for tonight\". The computer runs one task at a time, so these begin only when the current one ends. Describe them as next, never as underway or being worked on.\nRecent activity (oldest first):\nstatus: processing\nopening the inbox (browser)",
+      "msSinceTaskStart": 2000
+    }
+  },
+  {
+    "name": "blocked on the user, with work waiting behind it",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000400,
+          "event": {
+            "type": "progress",
+            "text": "searching",
+            "tool": "browser"
+          }
+        },
+        {
+          "at": 1700000000800,
+          "event": {
+            "type": "approval-request",
+            "title": "Which restaurant?"
+          }
+        },
+        {
+          "at": 1700000000900,
+          "event": {
+            "type": "session-state",
+            "running": "book a table",
+            "blockedOn": "CÉ LA VI, or LAVO?",
+            "queued": [
+              "check my unread emails"
+            ]
+          }
+        }
+      ],
+      "readAt": 1700000003000
+    },
+    "expected": {
+      "statusText": "BLOCKED ON THE USER — 1 step(s) done, then it stopped to ask them: \"CÉ LA VI, or LAVO?\". Nothing is progressing until they answer. The question is YOURS, not a third party's, so never say you're waiting to hear back from anyone else.\nNOT STARTED YET, waiting their turn (1, in order): \"check my unread emails\". The computer runs one task at a time, so these begin only when the current one ends. Describe them as next, never as underway or being worked on.\nRecent activity (oldest first):\nstatus: processing\nsearching (browser)\nneeds you: Which restaurant?",
+      "msSinceTaskStart": 3000
+    }
+  },
+  {
+    "name": "a block cleared out of band stops being reported",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000400,
+          "event": {
+            "type": "approval-request",
+            "title": "Which restaurant?"
+          }
+        },
+        {
+          "at": 1700000000500,
+          "event": {
+            "type": "session-state",
+            "running": "book a table",
+            "blockedOn": "CÉ LA VI, or LAVO?",
+            "queued": []
+          }
+        },
+        {
+          "at": 1700000000900,
+          "event": {
+            "type": "approval-resolved",
+            "id": "a1",
+            "status": "approved"
+          }
+        },
+        {
+          "at": 1700000001200,
+          "event": {
+            "type": "progress",
+            "text": "booking the table",
+            "tool": "browser"
+          }
+        }
+      ],
+      "readAt": 1700000002000
+    },
+    "expected": {
+      "statusText": "Still working — 1 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\nstatus: processing\nneeds you: Which restaurant?\nthat request was answered (approved)\nbooking the table (browser)",
+      "msSinceTaskStart": 2000
+    }
+  },
+  {
+    "name": "a block does not survive into the next task",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000200,
+          "event": {
+            "type": "session-state",
+            "running": "book a table",
+            "blockedOn": "Which one?",
+            "queued": []
+          }
+        },
+        {
+          "at": 1700000000400,
+          "event": {
+            "type": "status",
+            "status": "idle"
+          }
+        },
+        {
+          "at": 1700000000900,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000001100,
+          "event": {
+            "type": "progress",
+            "text": "checking the inbox"
+          }
+        }
+      ],
+      "readAt": 1700000002000
+    },
+    "expected": {
+      "statusText": "Still working — 1 step(s) done so far. You have no estimate of how much longer; don't invent one.\nRecent activity (oldest first):\nstatus: processing\nstatus: idle\nstatus: processing\nchecking the inbox",
+      "msSinceTaskStart": 1100
+    }
+  },
+  {
+    "name": "the queue drains and is no longer mentioned",
+    "input": {
+      "maxLines": null,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000100,
+          "event": {
+            "type": "session-state",
+            "running": "a",
+            "queued": [
+              "b"
+            ]
+          }
+        },
+        {
+          "at": 1700000000200,
+          "event": {
+            "type": "complete",
+            "summary": "a is done"
+          }
+        },
+        {
+          "at": 1700000000300,
+          "event": {
+            "type": "session-state",
+            "running": "b",
+            "queued": []
+          }
+        }
+      ],
+      "readAt": 1700000001000
+    },
+    "expected": {
+      "statusText": "Finished after 0 step(s).\nRecent activity (oldest first):\nstatus: processing\nfinished: a is done",
+      "msSinceTaskStart": 200
+    }
+  }
+]

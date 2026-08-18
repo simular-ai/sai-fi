@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG BUILDS ONLY (this file lives in src/debug, so it is never packaged into a release APK).
+
+  Android blocks cleartext traffic by default from targetSdk 28 onward, which kills the local dev
+  loop: concierge_url / presenter_url in local.properties normally point at a laptop on the LAN over
+  plain http:// and ws:// (e.g. http://10.110.23.80:8080, ws://10.110.23.80:8899), and OkHttp throws
+  "IOException: cleartext HTTP traffic to <host> not permitted".
+
+  Cleartext is permitted for everything rather than a fixed host list because the laptop's LAN IP
+  changes with DHCP; pinning an address here would mean editing this file every time it moves.
+  Release builds keep the platform default (cleartext denied) and must use https:// / wss://.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

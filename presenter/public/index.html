@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>sai-fi — presenter</title>
+    <style>
+      :root {
+        --bg: #0b0d10;
+        --panel: #12161b;
+        --line: #1f262e;
+        --dim: #6b7885;
+        --text: #e8edf2;
+        --you: #4ea1ff;
+        --sai: #35d6a4;
+        --warn: #ffb454;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font:
+          16px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          system-ui,
+          sans-serif;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        overflow: hidden;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        padding: 12px 20px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        flex-wrap: wrap;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #444;
+        flex: none;
+      }
+      .dot.on {
+        background: var(--sai);
+        box-shadow: 0 0 12px var(--sai);
+      }
+      .meta {
+        color: var(--dim);
+        font-size: 14px;
+      }
+      .meta b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      header .spacer {
+        flex: 1;
+      }
+      /* Reads as a control from across the room: amber while the browser is blocking us (the state
+         that needs a press), quiet once it's playing. */
+      #audioBtn {
+        font: inherit;
+        font-size: 14px;
+        padding: 6px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+      }
+      #audioBtn[data-state='blocked'] {
+        border-color: var(--warn);
+        color: var(--warn);
+        font-weight: 600;
+      }
+      #audioBtn[data-state='muted'] {
+        color: var(--dim);
+      }
+      .statusGroup {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+      /* MUTED / PAUSED, readable from the back of the room — the call's state, not the laptop's. */
+      #callState {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid currentColor;
+      }
+      #callState[data-state='muted'] {
+        color: var(--sai);
+      }
+      #callState[data-state='paused'] {
+        color: var(--warn);
+      }
+      main {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        min-height: 0;
+      }
+      /* The phone-screen column only exists once a frame has actually arrived, so a call without
+         screen mirroring (consent declined, or a release build) lays out exactly as before. */
+      main.has-screen {
+        grid-template-columns: 320px 1fr auto;
+      }
+
+      /* ── logs (left) ─────────────────────────────────────────────── */
+      /* The panel owns the border/background so the header doesn't scroll away with the log lines. */
+      .left {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 0;
+        border-right: 1px solid var(--line);
+        background: #0e1114;
+      }
+      /* Shared by both side panels, so the two columns are labelled the same way. */
+      .label {
+        font-size: 11px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        font-weight: 700;
+        color: var(--dim);
+        padding: 14px 14px 8px;
+      }
+      #logs {
+        overflow-y: auto;
+        padding: 0 14px 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        line-height: 1.65;
+        color: var(--dim);
+      }
+      #logs div {
+        white-space: pre-wrap;
+        word-break: break-word;
+        padding: 1px 0;
+      }
+
+      /* ── conversation (centre) + waveform ────────────────────────── */
+      .centre {
+        display: grid;
+        grid-template-rows: 1fr auto;
+        min-height: 0;
+      }
+      #convo {
+        overflow-y: auto;
+        padding: 28px 40px 40px;
+      }
+      .turn {
+        margin: 0 0 22px;
+        max-width: 62ch;
+      }
+      .who {
+        font-size: 12px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        font-weight: 700;
+        margin-bottom: 3px;
+      }
+      .turn.you .who {
+        color: var(--you);
+      }
+      .turn.sai .who {
+        color: var(--sai);
+      }
+      .what {
+        font-size: 25px;
+        line-height: 1.42;
+      }
+      .turn.photo img {
+        max-width: min(560px, 100%);
+        max-height: 46vh;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        display: block;
+      }
+      .placeholder {
+        color: var(--dim);
+        font-size: 19px;
+        padding: 34px 40px;
+      }
+
+      #wave {
+        display: block;
+        width: 100%;
+        height: 92px;
+        border-top: 1px solid var(--line);
+        background: #0e1114;
+      }
+
+      /* ── phone screen (right) ────────────────────────────────────── */
+      #phone {
+        display: none;
+        border-left: 1px solid var(--line);
+        background: #0e1114;
+        padding: 14px;
+        min-height: 0;
+        overflow: hidden;
+      }
+      main.has-screen #phone {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        align-items: center;
+      }
+      /* Shares .label's type; adds the status dot and stays full-width above the centred image
+         rather than centring with it. */
+      #phone .label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0;
+        align-self: stretch;
+      }
+      #phone .label .dot {
+        width: 7px;
+        height: 7px;
+        background: var(--sai);
+        box-shadow: 0 0 8px var(--sai);
+      }
+      /* The mirror dying mid-demo is silent otherwise — the last frame just sits there looking live. */
+      #phone.stale .label {
+        color: var(--warn);
+      }
+      #phone.stale .label .dot {
+        background: var(--warn);
+        box-shadow: none;
+      }
+      #phone.stale img {
+        opacity: 0.45;
+        filter: grayscale(0.6);
+      }
+      /* Fills the column's full height, with the COLUMN sizing itself to whatever width that implies
+         (hence `auto` above rather than a fixed 320px). A fixed-width column would letterbox a
+         portrait phone vertically — the screen is the thing worth seeing at size, so height wins and
+         the layout gives way. `align-items: center` is what stops the flex container stretching the
+         image's width and breaking the aspect ratio. */
+      #phoneImg {
+        flex: 1 1 0;
+        min-height: 0;
+        height: 100%;
+        width: auto;
+        max-width: 42vw; /* guard: on a short, wide window a full-height portrait image gets greedy */
+        object-fit: contain;
+        object-position: center;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        display: block;
+        transition:
+          opacity 0.25s,
+          filter 0.25s;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="dot" id="dot"></span>
+      <!-- MUTED / PAUSED sits WITH the status text it qualifies, not off in the right-hand corner:
+           the call's state reads as one thing ("live" + MUTED), and the operator is already looking at
+           the dot and the status line. Its own tighter gap, so the chip belongs to the status rather
+           than floating between two unrelated header items. -->
+      <span class="statusGroup">
+        <span class="meta" id="status">connecting…</span>
+        <span id="callState" hidden></span>
+      </span>
+      <span class="meta">machine <b id="machine">—</b></span>
+      <span class="meta">route <b id="route">—</b></span>
+      <span class="spacer"></span>
+      <button id="audioBtn" type="button">▶ Enable audio</button>
+    </header>
+
+    <main>
+      <div class="left">
+        <div class="label">Logs</div>
+        <div id="logs"></div>
+      </div>
+      <div class="centre">
+        <div id="convo"><div class="placeholder">Waiting for the phone to connect…</div></div>
+        <canvas id="wave"></canvas>
+      </div>
+      <div id="phone">
+        <div class="label"><span class="dot"></span><span id="phoneState">phone screen</span></div>
+        <img id="phoneImg" alt="phone screen" />
+      </div>
+    </main>
+
+    <script>
+      // ── wire protocol ──────────────────────────────────────────────
+      // text: JSON {t:'hello'|'turn'|'log'|'state'|'server-hello'|'publisher-gone', …}
+      // binary: [tag u8][seq u32le][payload]   tag 1=you(16k) 2=sai(24k) 3=jpeg photo 4=jpeg screen
+      const TAG_YOU = 1,
+        TAG_SAI = 2,
+        TAG_PHOTO = 3,
+        TAG_SCREEN = 4
+
+      const $ = (id) => document.getElementById(id)
+      const convo = $('convo'),
+        logs = $('logs')
+      let rates = { mic: 16000, sai: 24000 }
+
+      // ── conversation + logs ────────────────────────────────────────
+      const turns = new Map() // id → element, so a streaming turn updates in place
+      const reportedPlaceholders = new Set() // turn ids already named as placeholders (see below)
+      let autoScroll = true
+      convo.addEventListener('scroll', () => {
+        autoScroll = convo.scrollHeight - convo.scrollTop - convo.clientHeight < 80
+      })
+      function clearPlaceholder() {
+        const p = convo.querySelector('.placeholder')
+        if (p) p.remove()
+      }
+      function scroll() {
+        if (autoScroll) convo.scrollTop = convo.scrollHeight
+      }
+      // A turn that says nothing, in the two ways that have actually happened. Kept in step with
+      // isPlaceholderSpeech in ConciergeProtocol.kt — the phone filters these too, and this end is the
+      // backstop, because a placeholder reaching the projector is the version the room sees.
+      const PLACEHOLDER_SPEECH = new Set([
+        'empty-response',
+        'empty response',
+        'empty',
+        'no response',
+        'no response received',
+        'no response was received',
+        'no output',
+        'no text',
+        'no transcript',
+        'noop',
+        'no-op',
+        'null',
+        'undefined',
+      ])
+      const saysNothing = (text) =>
+        PLACEHOLDER_SPEECH.has(
+          text
+            .trim()
+            .replace(/^[.!?,;:"'()[\]]+|[.!?,;:"'()[\]]+$/g, '')
+            .toLowerCase(),
+        )
+
+      function upsertTurn(id, role, text) {
+        // Never render an empty turn. The phone also stops publishing these now (muted output was the
+        // source), but an empty SAI heading with nothing under it is never correct whatever sent it,
+        // and this end is the one the audience is looking at.
+        if (!text || !text.trim()) return
+        // …and neither is a mechanical placeholder standing in for silence. "Empty-Response" and "No
+        // response received." both reached this column on device, straight after a mute.
+        if (role !== 'you' && saysNothing(text)) {
+          // Once per turn, not once per upsert — a streaming turn arrives many times.
+          if (!reportedPlaceholders.has(id)) {
+            reportedPlaceholders.add(id)
+            addLog(`✗ dropped a placeholder turn ("${text.trim()}") — not speech`)
+          }
+          return
+        }
+        clearPlaceholder()
+        let el = turns.get(id)
+        if (!el) {
+          el = document.createElement('div')
+          el.className = 'turn ' + role
+          el.innerHTML = `<div class="who">${role === 'you' ? 'you' : 'sai'}</div><div class="what"></div>`
+          convo.appendChild(el)
+          turns.set(id, el)
+          el.dataset.role = role
+        } else if (el.dataset.role !== role) {
+          // Two DIFFERENT speakers arriving under one id means the phone handed out a duplicate — its
+          // log ids used to come from a non-atomic counter written by three threads. Upserting blind
+          // silently REPLACES the earlier turn, which is how one of Sai's replies could exist on the
+          // phone and never appear here. Say so instead of hiding it.
+          addLog(
+            `⚠ id collision on turn ${id}: ${el.dataset.role} → ${role} (a turn was overwritten)`,
+          )
+          el.dataset.role = role
+        }
+        el.querySelector('.what').textContent = text
+        scroll()
+      }
+      function addPhoto(bytes) {
+        clearPlaceholder()
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }))
+        const el = document.createElement('div')
+        el.className = 'turn you photo'
+        el.innerHTML = '<div class="who">you · glasses camera</div>'
+        const img = document.createElement('img')
+        img.src = url
+        img.onload = scroll
+        el.appendChild(img)
+        convo.appendChild(el)
+        scroll()
+      }
+      // ── phone screen ───────────────────────────────────────────────
+      // A live view, not an event: one <img> replaced in place, never appended to the conversation.
+      // The object URL from the PREVIOUS frame must be revoked or the browser holds every JPEG it has
+      // ever been handed — at ~3 fps for a whole demo that is hundreds of megabytes.
+      const phone = $('phone'),
+        phoneImg = $('phoneImg'),
+        phoneState = $('phoneState')
+      // ~3 fps at source, so 3s is ~9 missed frames — comfortably past a wifi hiccup.
+      const SCREEN_STALE_MS = 3000
+      let lastScreenAt = 0
+      function showScreen(bytes) {
+        const prev = phoneImg.src
+        phoneImg.src = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }))
+        if (prev.startsWith('blob:')) URL.revokeObjectURL(prev)
+        lastScreenAt = performance.now()
+        document.querySelector('main').classList.add('has-screen')
+      }
+      /** Drop the panel between calls, so a stale frame from the last call can't read as this one. */
+      function resetScreen() {
+        if (phoneImg.src.startsWith('blob:')) URL.revokeObjectURL(phoneImg.src)
+        phoneImg.removeAttribute('src')
+        lastScreenAt = 0
+        phone.classList.remove('stale')
+        phoneState.textContent = 'phone screen'
+        document.querySelector('main').classList.remove('has-screen')
+      }
+
+      function addLog(text) {
+        const el = document.createElement('div')
+        el.textContent = text
+        logs.appendChild(el)
+        while (logs.childElementCount > 800) logs.firstElementChild.remove()
+        logs.scrollTop = logs.scrollHeight
+      }
+
+      // ── audio: one context, one scheduled queue per stream ─────────
+      // Buffers are created at each stream's own rate so the browser resamples for us. `nextAt` is the
+      // scheduling cursor.
+      //
+      // ONLY SAI IS PLAYED. The room can hear the wearer with its own ears, so playing their mic back
+      // through the laptop was both redundant and actively harmful: their voice, delayed, into the air
+      // a metre from the glasses mic that produced it. That is an acoustic loop, and the server VAD
+      // cannot tell it from a person talking — so it barged in on Sai and Sai stopped mid-sentence.
+      // The mic stream still arrives and still drives the waveform; it is just never scheduled.
+      //
+      // MAX_LEAD is the "we are behind, resync" guard, and it used to be 0.4 s in BOTH directions.
+      // That was wrong for Sai: Live audio does not arrive in real time — the model emits a whole
+      // utterance in a burst, so a lead of several seconds is normal and correct, not a backlog.
+      // Resetting `nextAt` does not cancel buffers already scheduled, it makes every later buffer play
+      // ON TOP of them, which is how a reply came out overlapping and ending early. The cap now only
+      // catches a lead so large it must be a bug (a stalled tab), and the underrun branch — cursor
+      // behind the clock — is the one that does the real work.
+      const JITTER = 0.15,
+        MAX_LEAD = 10
+      let ctx = null
+      const streams = {
+        [TAG_YOU]: { rate: () => rates.mic, nextAt: 0, level: 0, colour: '#4ea1ff', scheduled: [] },
+        [TAG_SAI]: { rate: () => rates.sai, nextAt: 0, level: 0, colour: '#35d6a4', scheduled: [] },
+      }
+      // Audio has an explicit BUTTON, and it is the primary control.
+      //
+      // It was implicit for a while — build the context at load, try to resume, and hint "click
+      // anywhere" — and on the demo laptop the dashboard simply played nothing. Two reasons that
+      // design was fragile, both of them avoidable:
+      //
+      //  1. The AudioContext was constructed OUTSIDE a user gesture. Browsers treat that context as
+      //     blocked, and Safari in particular can leave it in a state a later resume() never recovers.
+      //     Build it inside the gesture instead — that path is the one browsers are guaranteed to
+      //     honour.
+      //  2. A small grey hint in a header, on a projector, is indistinguishable from "the feed is
+      //     broken". The state has to be a control you can see and press.
+      //
+      // Clicking anywhere still works as a fallback, because a presenter who ignores the button and
+      // clicks the page should get sound rather than a lesson.
+      const audioBtn = $('audioBtn')
+      /** Presenter's own choice to silence local playback. Distinct from "the browser is blocking us". */
+      let localMute = false
+      function syncAudioBtn() {
+        const running = ctx?.state === 'running'
+        audioBtn.textContent = !running
+          ? '▶ Enable audio'
+          : localMute
+            ? '🔇 Audio muted'
+            : '🔊 Audio on'
+        audioBtn.dataset.state = !running ? 'blocked' : localMute ? 'muted' : 'on'
+      }
+      async function startAudio() {
+        // Constructed HERE, in the gesture, not at load — see (1) above.
+        if (!ctx) {
+          ctx = new AudioContext()
+          ctx.onstatechange = () => {
+            addLog(`audio: context ${ctx.state}`)
+            syncAudioBtn()
+          }
+        }
+        // Frames that arrived while suspended were dropped, so restart both scheduling cursors —
+        // a stale nextAt would otherwise be read as a backlog to catch up on.
+        streams[TAG_YOU].nextAt = 0
+        streams[TAG_SAI].nextAt = 0
+        await ctx.resume().catch((e) => addLog(`audio: resume failed — ${e}`))
+        syncAudioBtn()
+      }
+      audioBtn.addEventListener('click', async (e) => {
+        e.stopPropagation() // don't also run the click-anywhere fallback below
+        if (ctx?.state === 'running') {
+          localMute = !localMute // once running, the button becomes the local mute
+          syncAudioBtn()
+          return
+        }
+        await startAudio()
+      })
+      const unblock = async () => {
+        await startAudio()
+        if (ctx?.state === 'running') {
+          document.removeEventListener('pointerdown', unblock)
+          document.removeEventListener('keydown', unblock)
+        }
+      }
+      document.addEventListener('pointerdown', unblock)
+      document.addEventListener('keydown', unblock)
+      syncAudioBtn()
+      function playPcm(tag, pcm) {
+        const s = streams[tag]
+        const n = pcm.length >> 1
+        if (!n) return
+        // PCM16LE → Float32, and track RMS for the waveform off the same pass.
+        const f = new Float32Array(n)
+        let sum = 0
+        for (let i = 0; i < n; i++) {
+          const v = pcm[i * 2] | ((pcm[i * 2 + 1] << 24) >> 16)
+          const x = v / 32768
+          f[i] = x
+          sum += x * x
+        }
+        s.level = Math.min(1, Math.sqrt(sum / n) * 4)
+        // The level is set BEFORE every bail-out below, so the waveform still shows who is talking
+        // when playback is blocked, muted, or — for the mic — deliberately never played.
+        if (tag === TAG_YOU) return // the room hears the wearer directly; see the note above
+        if (!ctx || ctx.state !== 'running') return // still blocked by the autoplay policy
+        if (localMute) return // presenter's own choice — frames are dropped, never queued
+        const rate = s.rate()
+        const buf = ctx.createBuffer(1, n, rate)
+        buf.copyToChannel(f, 0)
+        const src = ctx.createBufferSource()
+        src.buffer = buf
+        src.connect(ctx.destination)
+        const now = ctx.currentTime
+        if (s.nextAt < now + 0.01) {
+          s.nextAt = now + JITTER // underrun: the cursor fell behind the clock, start again from now
+        } else if (s.nextAt > now + MAX_LEAD) {
+          // Should not happen in normal operation — a lead this large means the tab stalled. Say so,
+          // because the old silent version of this branch is what shredded a reply into overlaps.
+          addLog(
+            `audio: resync — cursor ${(s.nextAt - now).toFixed(1)}s ahead, dropping the backlog`,
+          )
+          s.nextAt = now + JITTER
+        }
+        // Keep the node so a barge-in can cancel it: the phone flushes its own playback on interrupt,
+        // and without this the room kept hearing a sentence Sai had already been cut off in.
+        s.scheduled.push(src)
+        src.onended = () => {
+          const i = s.scheduled.indexOf(src)
+          if (i > -1) s.scheduled.splice(i, 1)
+        }
+        src.start(s.nextAt)
+        s.nextAt += buf.duration
+      }
+
+      /**
+       * The user barged in: drop everything still queued, exactly as the phone does. Without this the
+       * dashboard plays on past the interrupt, so the room hears the tail of the cut-off sentence and
+       * then the new answer — which reads as Sai repeating itself.
+       */
+      function cancelScheduled() {
+        for (const s of Object.values(streams)) {
+          for (const src of s.scheduled.splice(0)) runCatchingStop(src)
+          s.nextAt = 0
+        }
+      }
+      const runCatchingStop = (src) => {
+        try {
+          src.stop()
+        } catch {
+          /* already ended */
+        }
+      }
+
+      // ── waveform ───────────────────────────────────────────────────
+      // A voice-activity visualiser, not a scrolling recording: the bars hold position and sit as a
+      // flat dim line while the room is quiet, then swell and ripple only while you or Sai is
+      // actually talking. Each bar carries its own phase so the row undulates instead of pumping as
+      // one block, and a bell envelope concentrates the motion in the middle so it reads as a single
+      // voice rather than a graphic equaliser. Levels are fed by playPcm even while audio is paused,
+      // so the room can still see who is speaking with local playback off.
+      const cvs = $('wave'),
+        g = cvs.getContext('2d')
+      const IDLE = 0.02 // below this nobody is talking — settle back to the flat line
+      const IDLE_COLOUR = '#2b3541'
+      let amp = 0 // smoothed amplitude: rises fast on speech onset, falls slowly between words
+      let phase = 0 // ripple clock — only advances while someone is talking, so silence is still
+      let colour = IDLE_COLOUR // held after a turn ends, so the resting line shows who spoke last
+      let last = 0
+
+      function draw(t) {
+        const dt = last ? Math.min(0.05, (t - last) / 1000) : 0
+        last = t
+        const w = (cvs.width = cvs.clientWidth * devicePixelRatio)
+        const h = (cvs.height = cvs.clientHeight * devicePixelRatio)
+        const you = streams[TAG_YOU],
+          sai = streams[TAG_SAI]
+        // Whoever is louder owns the colour, so the bars read as "who is talking".
+        const loud = sai.level > you.level ? sai : you
+        if (loud.level > IDLE) colour = loud.colour
+        // Attack fast so the first syllable lands; release slow so the bars don't strobe on the
+        // gaps between packets (stream levels decay much quicker than speech actually stops).
+        amp += (loud.level - amp) * (loud.level > amp ? 0.35 : 0.08)
+        you.level *= 0.82
+        sai.level *= 0.82
+        const talking = amp > IDLE
+        if (talking) phase += dt * 9
+
+        g.clearRect(0, 0, w, h)
+        const bw = 4 * devicePixelRatio,
+          step = bw + 3 * devicePixelRatio
+        const n = Math.max(1, Math.floor((w + 3 * devicePixelRatio) / step))
+        const x0 = (w - (n * step - 3 * devicePixelRatio)) / 2
+        const mid = h / 2,
+          minH = 2 * devicePixelRatio
+        g.fillStyle = talking ? colour : IDLE_COLOUR
+        g.globalAlpha = 0.22 + Math.min(1, amp) * 0.78
+        for (let i = 0; i < n; i++) {
+          const u = n > 1 ? (i / (n - 1)) * 2 - 1 : 0 // −1 … 1 across the row
+          const envelope = Math.cos((u * Math.PI) / 2) ** 1.6
+          const ripple = 0.55 + 0.45 * Math.sin(phase + i * 0.45)
+          const bh = Math.max(minH, amp * envelope * ripple * h * 0.86)
+          g.fillRect(x0 + i * step, mid - bh / 2, bw, bh)
+        }
+        g.globalAlpha = 1
+
+        // Phone-screen liveness. A dead mirror looks exactly like a phone nobody is touching, so say
+        // so explicitly rather than leaving a frozen frame passing for live. (rAF's timestamp shares
+        // performance.now()'s origin, so this comparison is valid.)
+        if (lastScreenAt) {
+          const age = t - lastScreenAt
+          const stale = age > SCREEN_STALE_MS
+          phone.classList.toggle('stale', stale)
+          phoneState.textContent = stale
+            ? `phone screen — no frames ${Math.round(age / 1000)}s`
+            : 'phone screen'
+        }
+        requestAnimationFrame(draw)
+      }
+      requestAnimationFrame(draw)
+
+      // ── socket ─────────────────────────────────────────────────────
+      function connect() {
+        const key = new URLSearchParams(location.search).get('k')
+        const ws = new WebSocket(
+          `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/watch${key ? `?k=${key}` : ''}`,
+        )
+        ws.binaryType = 'arraybuffer'
+        ws.onopen = () => ($('status').textContent = 'connected — waiting for phone')
+        ws.onclose = () => {
+          $('dot').classList.remove('on')
+          $('status').textContent = 'presenter server offline — retrying'
+          setTimeout(connect, 1500)
+        }
+        ws.onmessage = (e) => {
+          if (e.data instanceof ArrayBuffer) {
+            const bytes = new Uint8Array(e.data)
+            const tag = bytes[0]
+            const body = bytes.subarray(5) // skip tag + u32 seq
+            if (tag === TAG_PHOTO) addPhoto(body)
+            else if (tag === TAG_SCREEN) showScreen(body)
+            else playPcm(tag, body)
+            return
+          }
+          const m = JSON.parse(e.data)
+          if (m.t === 'hello') {
+            rates = m.sampleRates ?? rates
+            $('machine').textContent = m.machine ?? '—'
+            $('dot').classList.add('on')
+            $('status').textContent = 'live'
+            turns.clear()
+            reportedPlaceholders.clear()
+            convo.innerHTML = ''
+            logs.innerHTML = ''
+            resetScreen()
+          } else if (m.t === 'turn') upsertTurn(m.id, m.role, m.text)
+          else if (m.t === 'log') addLog(m.text)
+          else if (m.t === 'state') {
+            $('status').textContent = m.status || 'live'
+            $('route').textContent = m.route || '—'
+            if (m.machine) $('machine').textContent = m.machine
+            $('dot').classList.toggle('on', !!m.active)
+            // Pause outranks mute, as on the phone's own chip: while paused there is no Live session to
+            // mute, so showing both would be describing a state that can't exist.
+            const chip = $('callState')
+            chip.hidden = !m.active || !(m.paused || m.muted)
+            chip.textContent = m.paused ? 'PAUSED' : 'MUTED'
+            chip.dataset.state = m.paused ? 'paused' : 'muted'
+          } else if (m.t === 'interrupted') {
+            // The wearer talked over Sai. Drop what we have queued so the room stops when they did.
+            cancelScheduled()
+          } else if (m.t === 'publisher-gone') {
+            $('dot').classList.remove('on')
+            $('status').textContent = 'phone disconnected'
+          } else if (m.t === 'server-hello' && !m.publisher) {
+            $('status').textContent = 'connected — waiting for phone'
+          }
+        }
+      }
+      connect()
+    </script>
+  </body>
+</html>
