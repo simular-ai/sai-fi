@@ -88,7 +88,7 @@ class LiveTurnGateTest {
     // stuck true and defer every later nudge behind it, silently, for the rest of the call.
     val ended = f.gate.onGenerationOrTurnEnd(generationEnded = true, turnEnded = false)
 
-    assertEquals(listOf("[agent] the task finished"), ended.sent())
+    assertTrue(ended.sent().single().endsWith("[agent] the task finished"))
     assertEquals(
         listOf("← nudge: delivering complete (held during the turn)"),
         ended.logs(),
@@ -131,11 +131,34 @@ class LiveTurnGateTest {
 
     val ended = f.gate.onGenerationOrTurnEnd(false, turnEnded = true)
 
-    assertEquals(listOf("first\n\nsecond"), ended.sent())
+    // Still ONE turn with both bodies in order — now behind the held-nudge preamble, which is what
+    // stops a result the model already delivered in the turn just ended being read out a second time.
+    val sent = ended.sent().single()
+    assertTrue(sent.startsWith("[system] What follows arrived while you were still speaking"))
+    assertTrue("the bodies keep their order, after the preamble", sent.endsWith("first\n\nsecond"))
     assertEquals(
         listOf("← nudge: delivering complete, notice (held during the turn)"),
         ended.logs(),
     )
+  }
+
+  @Test
+  fun `a nudge held behind a turn is warned that the turn may already have covered it`() {
+    // Live, 2026-08-19: a completion landed while Sai was answering "what's going on with all that?" —
+    // a turn in which it had already fetched and reported that same result through getSaiStatus. The
+    // completion flushed when the turn ended and was delivered anyway, so the user heard the same
+    // correction twice in consecutive breaths.
+    val held = Fixture().ready().speaking()
+    held.gate.injectNudge("complete", "[agent] the task finished")
+    val flushed = held.gate.onGenerationOrTurnEnd(false, turnEnded = true).sent().single()
+    assertTrue(flushed.contains("do NOT say it again"))
+
+    // …and NOT on the prompt path: a nudge delivered while the model is idle has no turn behind it to
+    // have repeated, and telling it "you may have already said this" there invites silence exactly
+    // where speech is correct.
+    val prompt = Fixture().ready()
+    val direct = prompt.gate.injectNudge("complete", "[agent] the task finished").sent().single()
+    assertEquals("[agent] the task finished", direct)
   }
 
   @Test

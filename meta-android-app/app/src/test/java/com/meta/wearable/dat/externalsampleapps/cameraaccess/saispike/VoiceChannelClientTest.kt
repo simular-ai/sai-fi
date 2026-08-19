@@ -12,6 +12,7 @@ package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.AgentEvent
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.AgentStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -204,4 +205,31 @@ class VoiceChannelClientTest {
     // Only fills a gap. If the wire ever starts carrying a summary, that one wins.
     if (complete is AgentEvent.Complete) assertEquals("the real summary", complete.summary)
   }
+  @Test
+  fun `an unmapped data part is named with its fields, an envelope marker just with its type`() {
+    // The distinction earns its keep: `text-start` is a bookend around deltas already read, and
+    // dropping it silently is right. `data-session` — seen once per turn on 2026-08-19 against the
+    // real staging agent — is the server handing over state with no handler on this side, and the log
+    // could not say what was in it. Every other data part has a branch; that one has none.
+    assertEquals(
+        "[voice] ignored frame: text-start",
+        describeIgnoredFrame("""{"type":"text-start","id":"1"}"""))
+
+    assertEquals(
+        "[voice] ignored frame: data-session — UNHANDLED data part, data fields: id, title",
+        describeIgnoredFrame("""{"type":"data-session","data":{"title":"x","id":"s1"}}"""))
+
+    // Values are never logged: this stream is mirrored to a projector and a data part can carry
+    // agent-derived text. Field NAMES are what tell you whether to write a branch.
+    assertFalse(
+        describeIgnoredFrame("""{"type":"data-session","data":{"secret":"hunter2"}}""")
+            .contains("hunter2"))
+
+    // Malformed and empty stay quiet rather than throwing on the reader thread.
+    assertEquals("[voice] ignored frame: (untyped)", describeIgnoredFrame("not json"))
+    assertEquals(
+        "[voice] ignored frame: data-session (no frame fields — nothing carried)",
+        describeIgnoredFrame("""{"type":"data-session"}"""))
+  }
+
 }

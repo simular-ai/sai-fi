@@ -383,9 +383,33 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
         }
     return listOf(
         GateAction.Log("← nudge: delivering ${pending.first} (held during the turn)"),
-        GateAction.SendTurn(pending.second),
+        GateAction.SendTurn(HELD_PREAMBLE + "\n\n" + pending.second),
     )
   }
+
+  /**
+   * Prepended to anything delivered by [flushNudges], and only to that.
+   *
+   * A nudge held during a turn describes something that happened WHILE the model was talking — and the
+   * turn it waited behind may already have covered it. Live on 2026-08-19: a completion landed while
+   * Sai was answering "what's going on with all that?", a turn in which it had already fetched and
+   * reported that very result via getSaiStatus. The completion flushed afterwards and was dutifully
+   * delivered again, so the user heard the same correction twice in consecutive breaths.
+   *
+   * Deliberately NOT solved by collapsing same-kind completions the way tagged nudges collapse: two
+   * completions in one turn are usually two different tasks, and dropping the older one would lose a
+   * result outright — the opposite failure, and a worse one. The model is the only thing that knows
+   * whether it already said this, so it is the thing that gets asked.
+   *
+   * Scoped to the flush path on purpose: a completion delivered promptly has nothing behind it to
+   * repeat, and telling the model "you may have already said this" there would invite silence exactly
+   * when speech is correct.
+   */
+  private val HELD_PREAMBLE =
+      "[system] What follows arrived while you were still speaking, so it waited for you to finish. " +
+          "You may already have covered some or all of it in that turn — if so, do NOT say it again: " +
+          "repeating a result the user just heard is worse than saying nothing, and saying nothing is " +
+          "the right output for a nudge you have already acted on. Speak only what is genuinely new."
 
   // ── Captures, and the tasks that wait on them ────────────────────────────────────────────────────
 

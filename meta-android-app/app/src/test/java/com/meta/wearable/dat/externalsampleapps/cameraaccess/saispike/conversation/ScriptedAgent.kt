@@ -97,6 +97,13 @@ class ScriptedAgent(
 
   override suspend fun post(path: String, body: JSONObject): JSONObject {
     calls += AgentCall(path, body = body)
+    // An abort has to actually stop the task here, or the double cannot represent the thing it is
+    // standing in for: the real one tears down the stream reader, so no complete, error or idle ever
+    // arrives for an aborted turn (see applyInterrupt's own note). Recording the call and then
+    // letting the beats land anyway made an aborted task finish normally and be reported as done —
+    // which is the exact lie the interrupt path exists to prevent, so no test could see it. That is
+    // why `abortRunning` sat here unused while every assertion about abort was a negative one.
+    if (path == "abort") abortRunning()
     return when (path) {
       "new-session" -> JSONObject().put("sessionId", "S-harness")
       else -> JSONObject().put("ok", true)

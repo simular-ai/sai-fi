@@ -105,8 +105,15 @@ class HttpAgentBridge(
    * absolute UTC instant rather than "just now". A held task takes its fix when it is HELD, not when
    * it drains, and it may drain much later.
    *
-   * Returns the empty string: on this API the response is the turn's event stream, so no session id
-   * comes back. Nothing reads it — the FSM keeps no session identity on purpose (see State.kt).
+   * Returns the empty string, because nothing here reads a session id — the FSM keeps no session
+   * identity on purpose (see State.kt).
+   *
+   * It is NOT true, as this said until 2026-08-19, that none comes back. The live tier showed staging
+   * sending a `data-session` frame carrying `sessionId` once per turn; this client maps it to nothing
+   * and drops it, which is consistent with the design decision above but is a choice rather than an
+   * absence. Worth knowing, because the last bug in this area — "start fresh" rotating the terminal's
+   * conversation instead of this one — is precisely the disagreement that frame would have made
+   * visible.
    */
   override suspend fun forwardTask(text: String, attachments: List<TaskAttachment>?): String {
     transport.sendMessage(

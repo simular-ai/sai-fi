@@ -1,7 +1,8 @@
 # On-device check — verifying a build on real hardware
 
-**What this is.** Eight checks, ~25 minutes, each naming what it actually exercises. Two of them
-(the queue and the hang-up) carry extra lettered cases, because those are where the failures cluster.
+**What this is.** Ten checks, ~30 minutes, each naming what it actually exercises. Three of them
+(the queue, stopping work, and the hang-up) carry extra lettered cases, because those are where the
+failures cluster.
 Run it after any change that touches the call — and after any server change to the concierge, because
 half of what these checks exercise lives there.
 
@@ -106,9 +107,9 @@ streams to a browser. DEBUG builds only, LAN only.
 > | Waking a machine | The "it's waking / it's ready" lines now travel as `notice` over the stream |
 > | Cancelling a queued task | Four endpoints deep, and the race answers are new — check 6 covers it |
 
-## 1. The eight checks
+## 1. The ten checks
 
-Each names **what it actually exercises** — that is the point of running these specific eight rather
+Each names **what it actually exercises** — that is the point of running these specific ten rather
 than "have a chat with it". Kotlin names (`GreetingGate`, `HangupPolicy`, `CallService`) are in this
 repo; a bare `.ts` filename means the server's half of the same thing, and what the client owes it
 either way is [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md).
@@ -255,9 +256,45 @@ mid-sentence.
 - **Then barge in while a task is running**, and let its completion land. Cutting Sai off must not
   cost you the result: it should still arrive after the exchange.
 
-### 8. endCall
+### 9. Stopping work
 
-**8a — with work still outstanding.** Do this one *before* letting the queue drain — if check 6's tasks
+The other half of the queue: check 6 is about work that waits, this is about work that dies.
+
+**9a — stop one thing.** Start a long task. While it runs:
+
+> "Actually, stop that"
+
+- **Expect:** it stops, Sai says so plainly, and — the part that matters — it does **not** describe the
+  stopped task as finished. "That's done" about work that was killed is the failure.
+- **Exercises:** `interrupt` → `applyInterrupt` → `POST abort`. Watch for `→ effect: interrupt` and then
+  `→ POST abort` in logcat. The abort produces **no agent event by design** (the stream reader is torn
+  down), so the handler has to close the turn out itself. If it doesn't, everything you ask afterwards
+  queues behind a turn that will never end — so follow up with a fresh, quick task and check it runs.
+
+**9b — stop everything, from two.** Start a long task, queue a second behind it (check 6a), then:
+
+> "Stop"
+
+- **Expect:** with two things outstanding "stop" is ambiguous, so Sai **asks which** rather than
+  guessing. Answer "all of it" → both go, and a follow-up "what's queued?" reports nothing waiting.
+- **Exercises:** the one-shot scope question in `applyInterrupt` — the first interrupt asks, the second
+  goes straight through. Guessing silently is the failure this exists to prevent, and it stops the wrong
+  task in half of all cases.
+
+**9c — start fresh.** With **nothing** outstanding:
+
+> "Let's start fresh"
+
+- **Expect:** Sai confirms a clean slate, and a `recallHistory` question afterwards no longer reaches
+  the old conversation.
+- **Exercises:** `resetSession` → `POST new-session`. Then repeat it **with a task running**:
+  **expect a refusal that names what is in the way**, not a rotation — rotating out from under live work
+  orphans it. This path is worth the attention: its last bug rotated the *terminal's* conversation
+  instead of this one, which no off-device test could see.
+
+### 10. endCall
+
+**10a — with work still outstanding.** Do this one *before* letting the queue drain — if check 6's tasks
 have all finished by now, start one long one and say goodbye straight over it:
 
 > "Thanks, that's everything — bye"
@@ -267,19 +304,19 @@ have all finished by now, start one long one and say goodbye straight over it:
 - **Exercises:** the persona contract's hang-up-vs-work rule, decided server-side, against the same
   `session-state` picture check 6b reads. Hanging up with a queued task unmentioned is the failure.
 
-**8b — the plain goodbye.** Once nothing is outstanding, say it again.
+**10b — the plain goodbye.** Once nothing is outstanding, say it again.
 
 - **Expect:** Sai says goodbye, *then* the call ends a beat later — not the other way round, and not
   both at once.
 
-**8c — the guard.** Start a fresh call, and with Sai never having spoken, say something that sounds
+**10c — the guard.** Start a fresh call, and with Sai never having spoken, say something that sounds
 like a farewell aimed at someone else ("yeah, bye!" as if to another person).
 
 - **Expect:** Sai does **not** hang up — it asks "did you want me to hang up?"
 - **Exercises:** `HangupPolicy` (covered by JVM tests, but only the decision — not the audio). The
   failure mode is cutting you off mid-sentence with another human.
 
-**8d — talking over the goodbye.** Cut in during the goodbye window.
+**10d — talking over the goodbye.** Cut in during the goodbye window.
 
 - **Expect:** the hangup aborts and Sai carries on, without saying goodbye a second time. Two triggers
   reach this — the barge-in itself and fresh speech after the goodbye finished playing — so also try
@@ -290,7 +327,7 @@ like a farewell aimed at someone else ("yeah, bye!" as if to another person).
 
 ## 2. Recording the result
 
-Write down, for each of the eight — and separately for each lettered case under 6 and 8 —
+Write down, for each of the ten — and separately for each lettered case under 6, 9 and 10 —
 **pass / fail / not-reached**, and for any failure, the log excerpt and what you actually heard. "Not
 reached" is a real result and worth recording; it usually means an earlier check left the session in a
 state the later one could not be provoked from, which is itself worth knowing. The queue cases in
@@ -324,4 +361,4 @@ worth keeping should become an executable spec rather than a memory — the serv
 **Going further.** This is the short gate — run it for a change. The cumulative by-ear matrix (60-odd
 rows, one per bug ever found on a device) and the demo runbook with its on-stage recovery notes live
 with the server's test docs and are **not mirrored here**; ask for them before a release or a stage
-rehearsal, because these eight checks are not a substitute for either.
+rehearsal, because these ten checks are not a substitute for either.

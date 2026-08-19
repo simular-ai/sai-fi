@@ -164,6 +164,20 @@ class ConciergeProtocolGoldenTest {
         expected(file, "complete with prompt-injection summary")
             .contains("\"\"\"$INJECTION\"\"\""))
 
+    // A completion carrying a summary must forbid inventing the part the summary leaves out. Live on
+    // 2026-08-19 the agent closed with "that's the full listing" and no listing, and Sai reported the
+    // folder empty — so the wording has to cover a summary that ANNOUNCES a result without carrying
+    // one, not just an absent summary, and has to name the way out rather than leave a gap to fill.
+    val withSummary = expected(file, "complete with summary")
+    assertTrue(withSummary.contains("does not actually CONTAIN the result"))
+    assertTrue(withSummary.contains("getSaiStatus"))
+    assertTrue(withSummary.contains("do NOT fill the gap"))
+
+    // …and the empty case keeps its own, stricter wording: there is nothing to look for at all.
+    val noSummary = expected(file, "complete without summary")
+    assertTrue(noSummary.contains("WITHOUT reporting any result"))
+    assertTrue(noSummary.contains("do NOT invent what it might have found"))
+
     // A notice must be relayed, and must not be mistaken for a result — those two clauses are the
     // whole point of the kind existing, so they are asserted rather than left to the wording.
     val notice = expected(file, "notice (waking VM)")

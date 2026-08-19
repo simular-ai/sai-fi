@@ -135,7 +135,11 @@ class LiveAgent(
         }
   }
 
+  /** Operation paths this run posted — `abort`, `new-session`, an approval. */
+  val posts = mutableListOf<String>()
+
   override suspend fun post(path: String, body: JSONObject): JSONObject {
+    posts += path
     log("[live] → POST $path")
     return VoiceChannelClient.postOperation(
         config.baseUrl, config.idToken, path, body.put("machineId", config.machineId))

@@ -161,7 +161,7 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 
 | Path | What it is |
 | --- | --- |
-| `voice-profile.json` | The system prompt (41 blocks), the 17 tool declarations, the model and the voice. **Generated** from the server's source before it was deleted — the wording is load-bearing, so it was never retyped. It is on the unit-test classpath too (`sourceSets` in `build.gradle.kts`), so `VoiceProfileTest` and `LiveBrain` grade the file the app loads. There is no vendored second copy: the one that existed drifted, and is gone. |
+| `voice-profile.json` | The system prompt (42 blocks), the 17 tool declarations, the model and the voice. **Generated** from the server's source before it was deleted — the wording is load-bearing, so it was never retyped. It is on the unit-test classpath too (`sourceSets` in `build.gradle.kts`), so `VoiceProfileTest` and `LiveBrain` grade the file the app loads. There is no vendored second copy: the one that existed drifted, and is gone. |
 
 ### Resources — `app/src/main/res/`
 
@@ -174,7 +174,7 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 
 ### Tests — `app/src/test/java/…/saispike/`
 
-321 JVM tests, no device or emulator needed — everything below runs on `./gradlew
+327 JVM tests, no device or emulator needed — everything below runs on `./gradlew
 :app:testDebugUnitTest` except the tiers that cost money and the golden generator, each gated on an
 environment variable and skipping itself otherwise. Five kinds:
 
@@ -195,13 +195,16 @@ environment variable and skipping itself otherwise. Five kinds:
 - **`conversation/`** — the closed loop, with everything real except the brain and the agent: a fake
   brain's tool calls go through the real `LiveTurnGate`, `Concierge` and `HttpAgentBridge` to a
   `ScriptedAgent` that implements `VoiceTransport`, the seam *under* the bridge — so a wire bug has
-  nowhere to hide. `BargeInConversationTest` and `QueueConversationTest` cover the two hardest paths,
+  nowhere to hide. `BargeInConversationTest` and `QueueConversationTest` cover the two hardest paths, `AbortConversationTest` the
+  one that stops work (the positive abort path, which every other assertion in the suite only ever
+  proved *didn't* happen),
   `LongConversationTest` the state that only accumulates, and `TimingMatrixTest` replays one
   conversation at seven speeds asserting invariants rather than orderings, because every barge-in ⇄
   queue bug on record is a race. `PresenterPublisher` can mirror a harness run to the dashboard.
 - **The paid tiers** — off by default, each behind its own switch: `LiveAgentTest` /
   `SummaryFixLiveTest` (`SAI_LIVE_AGENT=1`) drive a real cloud-api to catch **contract drift** and
-  nothing else; `eval/LoopEvalTest` (`SAI_CONVERSATION_EVAL=1`) runs the real model through the real
+  nothing else, joined by `LiveQueueTest`, which is the only place the queue is admitted behind a task
+  that is genuinely still running and the only place `abort` / `new-session` reach a real endpoint; `eval/LoopEvalTest` (`SAI_CONVERSATION_EVAL=1`) runs the real model through the real
   FSM and grades the transcript against `eval/rubric.json`; `eval/TranscriptEvalTest`
   (`SAI_TRANSCRIPT_EVAL=1`) runs it over the 32 fixed transcripts in `eval/Transcripts.kt` with no FSM,
   grading phrasing by judge and effect choice deterministically; `DemoFlowTest` (`SAI_DEMO=1`) drives a

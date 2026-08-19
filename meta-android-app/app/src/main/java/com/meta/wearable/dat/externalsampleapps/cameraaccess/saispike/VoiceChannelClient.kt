@@ -145,16 +145,7 @@ object VoiceChannelClient {
             conn.inputStream.bufferedReader().use { reader ->
               readSseLines(reader) { payload ->
                 when (val out = turn.onPayload(payload)) {
-                  null -> {
-                    // NAME it. Most unmapped frames are envelope markers this client is right to
-                    // ignore, but a frame the server started sending and this client never learned
-                    // looks identical from here — and an anonymous "dropped something" line cannot
-                    // tell the two apart. The live-agent contract test reads these lines, so the
-                    // name is the evidence it works from.
-                    val type =
-                        runCatching { JSONObject(payload).optString("type") }.getOrNull().orEmpty()
-                    onLog("[voice] ignored frame: ${type.ifEmpty { "(untyped)" }}")
-                  }
+                  null -> onLog(describeIgnoredFrame(payload))
                   else -> onEvent(out)
                 }
               }
@@ -287,6 +278,35 @@ class TurnEvents {
       else -> event
     }
   }
+}
+
+/**
+ * The log line for a frame that mapped to nothing.
+ *
+ * NAME it. Most unmapped frames are envelope markers this client is right to ignore
+ * (`text-start`/`text-end` around the deltas it does read), but a frame the server started sending and
+ * this client never learned looks identical from here — and an anonymous "dropped something" line
+ * cannot tell the two apart. The live-agent contract test reads these lines, so the name is the
+ * evidence it works from.
+ *
+ * A `data-*` frame additionally gets its FIELD NAMES, because the two cases stop being equivalent
+ * there: a bookend carries nothing worth having, whereas a custom data part is the server handing over
+ * state, and every other one of those (`data-status`, `data-progress`, `data-approval-request`) has a
+ * handler. On 2026-08-19 the live tier showed `data-session` arriving once per turn with no handler at
+ * all, and the log could not say what was in it — which is the gap this closes.
+ *
+ * Names only, never values: this log is mirrored to the presenter dashboard, and a data part can carry
+ * agent-derived text. Knowing a frame has an `id` and a `title` is what tells you whether to write a
+ * branch for it; the contents are not needed for that and are not ours to project on a wall.
+ */
+fun describeIgnoredFrame(payload: String): String {
+  val json = runCatching { JSONObject(payload) }.getOrNull()
+  val type = json?.optString("type").orEmpty().ifEmpty { "(untyped)" }
+  if (json == null || !type.startsWith("data-")) return "[voice] ignored frame: $type"
+  val fields = json.optJSONObject("data")?.keys()?.asSequence()?.sorted()?.toList().orEmpty()
+  val where = if (json.has("data")) "data" else "frame"
+  return if (fields.isEmpty()) "[voice] ignored frame: $type (no $where fields — nothing carried)"
+  else "[voice] ignored frame: $type — UNHANDLED data part, $where fields: ${fields.joinToString(", ")}"
 }
 
 fun parseAgentEvent(raw: String): AgentEvent? {

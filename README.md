@@ -57,6 +57,13 @@ at runtime looking like a bug — so fill in the whole required section.
 
 ## Build and test
 
+**The simple path.** Open the `meta-android-app` folder in Android Studio — not the repo root; Gradle
+lives one level down, and the parent will not look like a project. Fill in `local.properties`,
+**File > Sync Project with Gradle Files**, plug in a phone with USB debugging, and click **Run**.
+That installs and launches. It does not run the tests.
+
+The command line does both:
+
 ```bash
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 cd meta-android-app && ./gradlew :app:installDebug
@@ -65,7 +72,7 @@ cd meta-android-app && ./gradlew :app:testDebugUnitTest --rerun
 
 `--rerun` matters. Without it the test task reports `UP-TO-DATE` from cache and verifies nothing.
 
-CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 321 JVM tests,
+CI runs the same gate on every push and PR (`.github/workflows/android.yml`) — 327 JVM tests,
 including the 59-scenario FSM golden catalog, the string goldens described below, and the conversation
 harness that drives a fake brain through the real gate, FSM and bridge down to a scripted agent. On-device
 and by-ear checks are still manual: [`docs/ON_DEVICE_CHECK.md`](docs/ON_DEVICE_CHECK.md).
@@ -76,6 +83,10 @@ when you do. CI never sets any of these:
 ```bash
 # contract drift against a real cloud-api — an SSE field that changed shape, a status we don't map
 SAI_LIVE_AGENT=1 ./gradlew :app:testDebugUnitTest --tests "*LiveAgent*" --rerun
+
+# the queue and the stop button against a real agent: a second ask while the first is genuinely
+# still running, then abort and new-session on the wire
+SAI_LIVE_AGENT=1 ./gradlew :app:testDebugUnitTest --tests "*LiveQueueTest*" --rerun
 
 # the real model through the real FSM, graded against the rubric (a full run takes minutes)
 SAI_CONVERSATION_EVAL=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*LoopEvalTest*" --rerun
