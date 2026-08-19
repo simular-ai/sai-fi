@@ -24,8 +24,8 @@ class EvalDataTest {
   fun `the catalogue is all there`() {
     // Pinned counts, so a truncated file or a half-finished edit is a failure rather than a quiet
     // reduction in coverage. Update these deliberately when the catalogue grows.
-    assertEquals("rules", 31, rubric.size)
-    assertEquals("transcripts", 32, TRANSCRIPTS.size)
+    assertEquals("rules", 32, rubric.size)
+    assertEquals("transcripts", 33, TRANSCRIPTS.size)
   }
 
   @Test

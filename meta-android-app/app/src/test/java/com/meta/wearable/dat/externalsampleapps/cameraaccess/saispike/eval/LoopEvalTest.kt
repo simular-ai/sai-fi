@@ -13,7 +13,7 @@
 //      JUDGE_MODEL (grader, default gemini-3.5-flash-lite)
 //      EVAL_PRINT=1 dumps each captured conversation
 //
-// **This complements `TranscriptEvalTest`; it does not replace it.** That one drives the model over 32
+// **This complements `TranscriptEvalTest`; it does not replace it.** That one drives the model over 33
 // fixed transcripts with no FSM: broad coverage of phrasing and classification, but its queue is a
 // fiction — `forwardToAgent` resolves to a canned `ok`, and the `session-state` a scenario reacts to
 // was written by hand. So it can grade whether the model SAYS the right thing about a waiting task,

@@ -326,6 +326,20 @@ val TRANSCRIPTS: List<Transcript> =
                     user("how much longer will this take?"),
                     user("what have you done so far?"),
                 )),
+        // Filler is what the model reaches for when a turn has almost nothing in it — an opener, the
+        // request read straight back, a line about what it is about to do. On a screen that reads as
+        // politeness; on the glasses it IS the reply, and the user sits through all of it to hear two
+        // meetings. Nothing here needs elaborating, which is exactly what makes it the hard case.
+        Transcript(
+            name = "plain request — the answer, and nothing wrapped around it",
+            targets = listOf("no-filler", "no-tool-narration", "first-person"),
+            turns =
+                listOf(
+                    user("check my calendar for tomorrow"),
+                    agent(status("processing")),
+                    agent(complete("Two meetings: standup at 9, design review at 2.")),
+                ),
+            expectTools = ToolExpectation(includes = listOf("forwardToAgent"))),
         Transcript(
             name = "email draft — transparency + verbatim",
             targets = listOf("transparency", "no-re-ask", "first-person"),
@@ -643,9 +657,17 @@ val TRANSCRIPTS: List<Transcript> =
         // to react to.
         Transcript(
             name = "one running, one waiting — status accounts for each separately",
+            // `no-filler` rides along here deliberately, pointing the other way. This is the reply
+            // that legitimately needs two clauses, so it is where a brevity rule would do its damage
+            // — one blended "I'm working on it" is shorter and wrong. Grading both on one transcript
+            // is what keeps the length rule a ban on filler rather than on content.
             targets =
                 listOf(
-                    "queued-not-underway", "no-fabricated-timing", "no-re-ask", "first-person"),
+                    "queued-not-underway",
+                    "no-fabricated-timing",
+                    "no-re-ask",
+                    "first-person",
+                    "no-filler"),
             turns =
                 listOf(
                     user("check my unread emails and Slack messages"),

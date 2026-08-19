@@ -206,7 +206,7 @@ environment variable and skipping itself otherwise. Five kinds:
   nothing else, joined by `LiveQueueTest`, which is the only place the queue is admitted behind a task
   that is genuinely still running and the only place `abort` / `new-session` reach a real endpoint; `eval/LoopEvalTest` (`SAI_CONVERSATION_EVAL=1`) runs the real model through the real
   FSM and grades the transcript against `eval/rubric.json`; `eval/TranscriptEvalTest`
-  (`SAI_TRANSCRIPT_EVAL=1`) runs it over the 32 fixed transcripts in `eval/Transcripts.kt` with no FSM,
+  (`SAI_TRANSCRIPT_EVAL=1`) runs it over the 33 fixed transcripts in `eval/Transcripts.kt` with no FSM,
   grading phrasing by judge and effect choice deterministically; `DemoFlowTest` (`SAI_DEMO=1`) drives a
   real model and a real agent end to end, paced for the presenter so a demo can be rehearsed without
   hardware.

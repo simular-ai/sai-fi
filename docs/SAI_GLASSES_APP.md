@@ -363,7 +363,7 @@ Layered the same way the server's own suite is — deterministic first, by-ear l
    status the mapper does not know — because behaviour belongs in the scripted tier where it is
    reproducible and free. `SAI_CONVERSATION_EVAL=1` (`eval/LoopEvalTest`) puts the real model through
    the real FSM and grades the transcript rule by rule against `eval/rubric.json`.
-   `SAI_TRANSCRIPT_EVAL=1` (`eval/TranscriptEvalTest`) runs it over 32 fixed transcripts with no FSM,
+   `SAI_TRANSCRIPT_EVAL=1` (`eval/TranscriptEvalTest`) runs it over 33 fixed transcripts with no FSM,
    grading phrasing by judge and effect choice deterministically — the two share the rubric and catch
    different things, since this one can grade whether she SAYS the right thing about a waiting task but
    not whether the task was really waiting. `SAI_DEMO=1` (`DemoFlowTest`) drives a real model **and** a

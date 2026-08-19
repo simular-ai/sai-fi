@@ -91,7 +91,7 @@ SAI_LIVE_AGENT=1 ./gradlew :app:testDebugUnitTest --tests "*LiveQueueTest*" --re
 # the real model through the real FSM, graded against the rubric (a full run takes minutes)
 SAI_CONVERSATION_EVAL=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*LoopEvalTest*" --rerun
 
-# the real model over 32 fixed transcripts, no FSM — phrasing and effect choice, graded the same way
+# the real model over 33 fixed transcripts, no FSM — phrasing and effect choice, graded the same way
 SAI_TRANSCRIPT_EVAL=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*TranscriptEvalTest*" --rerun
 
 # a real model AND a real agent, end to end; add SAI_PRESENTER=1 to watch it in the dashboard
@@ -100,7 +100,7 @@ SAI_DEMO=1 GEMINI_API_KEY=… ./gradlew :app:testDebugUnitTest --tests "*DemoFlo
 
 The two judged tiers grade against the same rubric and see different failures, which is why both
 exist: `LoopEvalTest` runs a handful of conversations through a queue that really exists;
-`TranscriptEvalTest` runs 32 fixed transcripts with no FSM, so it can grade whether she SAYS the right
+`TranscriptEvalTest` runs 33 fixed transcripts with no FSM, so it can grade whether she SAYS the right
 thing about a waiting task but not whether the task was really waiting. Narrow either with
 `EVAL_ONLY="<name fragment>"`, and read `EVAL_MODEL` before reading a red — the default is a tier
 below what the glasses run.
