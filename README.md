@@ -1,5 +1,7 @@
 # sai-fi
 
+![System flow](docs/system-flow.png)
+
 A standalone Android app that puts the **Sai voice concierge** on Meta Ray-Ban glasses.
 
 The phone runs a Gemini Live audio session **directly, with your own API key**, and runs the whole
