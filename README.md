@@ -11,6 +11,8 @@ Talk to Sai hands-free, hand work to an agent running on your own machine, and h
 is done. **The voice half needs no server of ours**; the agent half needs a Sai account, because that
 is someone else's computer doing real work.
 
+**API documentation:** [https://sai.work/api](https://sai.work/api)
+
 - [`docs/DIRECTORY.md`](docs/DIRECTORY.md) — **new to the code? start here.** A one-line-per-file
   map of the whole repo, so you can find what you want without reading the tree.
 - [`docs/SAI_GLASSES_APP.md`](docs/SAI_GLASSES_APP.md) — this app's architecture: modules, call
