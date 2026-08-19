@@ -1,6 +1,6 @@
 # sai-fi
 
-![System flow](docs/system-flow.png)
+<img src="docs/system-flow.png" alt="System flow" width="480">
 
 A standalone Android app that puts the **Sai voice concierge** on Meta Ray-Ban glasses.
 
