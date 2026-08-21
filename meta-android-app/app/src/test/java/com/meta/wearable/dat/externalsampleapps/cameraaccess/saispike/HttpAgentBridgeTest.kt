@@ -9,10 +9,13 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.Approv
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ApprovalSelection
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ResetOutcome
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.TaskAttachment
+import java.time.Instant
+import java.util.TimeZone
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -28,6 +31,9 @@ private class RecordingTransport(
   val sends = mutableListOf<Sent>()
   val posts = mutableListOf<Pair<String, JSONObject>>()
 
+  /** Every call, in order, so an abort can be checked for stopping the read BEFORE it posts. */
+  val abandoned = mutableListOf<Int>()
+
   override suspend fun sendMessage(
       machineId: String,
       message: String,
@@ -35,6 +41,10 @@ private class RecordingTransport(
       follow: Boolean,
   ) {
     sends += Sent(message, attachments, follow)
+  }
+
+  override fun abandonTurn() {
+    abandoned += posts.size
   }
 
   override suspend fun post(path: String, body: JSONObject): JSONObject {
@@ -45,6 +55,7 @@ private class RecordingTransport(
 }
 
 class HttpAgentBridgeTest {
+
 
   private fun bridge(t: RecordingTransport) = HttpAgentBridge("m1", t)
 
@@ -79,6 +90,46 @@ class HttpAgentBridgeTest {
         b.steer("make it 8pm")
         assertEquals("make it 8pm", t.sends.single().message)
       }
+
+  // ── the user's clock ───────────────────────────────────────────────────────
+
+  @Test
+  fun `the clock is the user's, so a relative date cannot resolve against the datacenter's day`() {
+    // One instant, two places, and NOT THE SAME DAY. That is the failure worth a test: "book a table
+    // for Friday" is not a question about the agent's calendar, and a VM in California reading it for
+    // a user in Singapore books Thursday without anything about the answer looking wrong.
+    val instant = Instant.parse("2026-08-20T18:00:00Z").toEpochMilli()
+
+    val singapore = describeTaskClock(instant, TimeZone.getTimeZone("Asia/Singapore"))
+    assertTrue(singapore, singapore.contains("Friday 21 August 2026 at 02:00"))
+    assertTrue("the zone has to travel too, or DST is unrecoverable", singapore.contains("Asia/Singapore"))
+
+    val california = describeTaskClock(instant, TimeZone.getTimeZone("America/Los_Angeles"))
+    assertTrue(california, california.contains("Thursday 20 August 2026 at 11:00"))
+  }
+
+  @Test
+  fun `the spoken clock is the phone's, never UTC`() {
+    val instant = Instant.parse("2026-08-20T18:00:00Z").toEpochMilli()
+    val spoken = describePhoneClock(instant, TimeZone.getTimeZone("Asia/Singapore"))
+    assertTrue(spoken, spoken.contains("Friday 21 August 2026 at 2:00 AM"))
+    assertTrue(spoken, spoken.contains("Asia/Singapore"))
+    assertTrue("UTC must be named as the wrong clock", spoken.contains("UTC is not their time"))
+    assertFalse("24-hour UTC must not be what it speaks", spoken.contains("18:00"))
+  }
+
+  @Test
+  fun `every forwarded task carries the clock, location or no location`() = runBlocking {
+    // Unlike the location, which costs a GPS read and only rides on the requests that asked for it.
+    // The phone knows the time for free, and the request that needs it is not identifiable in advance
+    // — "is it open now" does not look like a question about time until it is answered wrongly.
+    val t = RecordingTransport()
+    bridge(t).forwardTask("book a table for Friday")
+
+    val sent = t.sends.single().message
+    assertTrue("the user's words must still lead", sent.startsWith("book a table for Friday"))
+    assertTrue("no clock reached the agent: $sent", sent.contains("where the user is (time zone "))
+  }
 
   // ── the photo stash ────────────────────────────────────────────────────────
 
@@ -143,6 +194,39 @@ class HttpAgentBridgeTest {
         bridge(t).resetSession()
         assertEquals("api", t.posts.single().second.getString("channel"))
       }
+
+  @Test
+  fun `abort stops reading the turn, and does it before the POST`() = runBlocking {
+    // Ordering, not just occurrence. The POST is a network round-trip that can be slow or fail, and
+    // every event that arrives while it is in flight is an event from a turn the user has already
+    // stopped. On 2026-08-20 an aborted task delivered its progress, its answer and a `complete`
+    // through a reader nobody had closed, and Sai reported the result of work it had been told to
+    // abandon — so the local teardown goes first and unconditionally.
+    val t = RecordingTransport()
+    bridge(t).abort()
+    assertEquals("abandoned once, before any post", listOf(0), t.abandoned)
+    assertEquals(listOf("abort"), t.posts.map { it.first })
+  }
+
+  @Test
+  fun `a failing abort POST still leaves the turn abandoned, and does not throw`() = runBlocking {
+    // The half that matters most is the local one: a machine that never got the abort is a task
+    // running somewhere, but a reader still attached is a task still TALKING to the user.
+    //
+    // And it must not propagate. This used to throw, which returned before `applyInterrupt` could
+    // close the turn out — so the FSM stayed in `working` with its reader ALREADY torn down, meaning
+    // no event could ever arrive to end it, and admission then held every later task behind a turn
+    // that could not finish. One failed POST killed the rest of the call. The server's half is
+    // best-effort by nature; the fix was to code it that way rather than only say so.
+    val t = RecordingTransport(throwOn = "abort")
+    var localAborts = 0
+
+    HttpAgentBridge("m1", t, abortLocalWork = { localAborts++ }).abort()
+
+    assertEquals("the local halves still ran", 1, localAborts)
+    assertEquals("and ran before the doomed post", listOf(0), t.abandoned)
+    assertEquals(listOf("abort"), t.posts.map { it.first })
+  }
 
   @Test
   fun `abort needs no channel — it is about the machine, not a conversation`() = runBlocking {

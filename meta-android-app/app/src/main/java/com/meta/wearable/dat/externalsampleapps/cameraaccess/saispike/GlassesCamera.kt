@@ -33,10 +33,18 @@ import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -58,8 +66,9 @@ object GlassesCamera {
   // failed stream fully releases — the glasses expose a single camera stream per session.
   private const val RETRY_DELAY_MS = 750L
   // STREAMING only means the state machine advanced; the first frame over Bluetooth lands later.
-  // capturePhoto before then fails with a bare "Failed to capture photo".
-  private const val FIRST_FRAME_TIMEOUT_MS = 8_000L
+  // capturePhoto before then fails with a bare "Failed to capture photo". Device 2026-08-20: first
+  // frame at 8253 ms — 8 s was just short of a picture that did arrive.
+  private const val FIRST_FRAME_TIMEOUT_MS = 12_000L
   // A cold BT camera's FIRST capturePhoto almost always comes back empty right as frames begin — the
   // reason a capture used to burn 2–3 tries. So the still waits for the stream to be DELIVERING, not
   // merely to have delivered once.
@@ -70,13 +79,20 @@ object GlassesCamera {
   // duration cannot — 8 frames land in ~330 ms on a healthy 24 fps link and take seconds on a
   // struggling one, which is precisely when more waiting is the right answer.
   private const val STEADY_FRAMES = 8
-  // Cap on the wait for those frames, MEASURED FROM THE FIRST-FRAME DEADLINE, so a camera that dribbles
-  // two frames and stalls doesn't hold the capture open indefinitely. We capture anyway when it expires.
-  private const val STEADY_FRAMES_TIMEOUT_MS = 3_000L
+  // Cap on waiting for those frames, MEASURED FROM THE FIRST FRAME, not from STREAMING. The previous
+  // combined deadline (first-frame timeout + 3 s) stole the settle whenever the first frame was late:
+  // 8.2 s to first frame left 2.8 s for the rest, we shot at 6/8, and all three capturePhoto calls
+  // failed while the stream recovered to 24 frames underneath them. We still capture anyway when this
+  // expires — one frame is a picture — but only after a real post-first-frame wait.
+  private const val STEADY_FRAMES_TIMEOUT_MS = 8_000L
   // In-stream capturePhoto retries — much cheaper than re-adding the whole stream. A safety net now
   // that the settle above makes the first attempt succeed in the common case.
   private const val CAPTURE_ATTEMPTS = 3
-  private const val CAPTURE_RETRY_DELAY_MS = 400L
+  // Between still attempts, wait for a few more video frames (or this cap) rather than a blind 400 ms.
+  // On a healthy 24 fps link four frames land in ~160 ms and the wait returns early; on a struggling
+  // one the extra frames are the evidence the still pipeline has something to grab.
+  private const val CAPTURE_RETRY_DELAY_MS = 1_500L
+  private const val CAPTURE_RETRY_FRAMES = 4
   // Stream config, kept as named constants so the diagnostics can report exactly what we asked for
   // (quality/frame rate are a common cause of "started but sent no frame" on a struggling link).
   private val STREAM_QUALITY = VideoQuality.MEDIUM
@@ -125,14 +141,6 @@ object GlassesCamera {
   // camera for the rest of the call.
   private const val RELEASE_TIMEOUT_MS = 3_000L
 
-  /** DAT's raw camera-permission status, for the log — "unknown" when the SDK wouldn't say. */
-  private suspend fun permissionStatus(): String =
-      Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()?.toString() ?: "unknown"
-
-  /** True once the glasses have granted the DAT camera permission (device-level, via the Meta AI app). */
-  private suspend fun hasCameraPermission(): Boolean =
-      Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull() == PermissionStatus.Granted
-
   /**
    * Capture one still off [session]. Requires the DAT camera permission already granted (grant it from
    * the Activity first) AND [session] to reach STARTED. Returns a typed [Result] describing success or
@@ -146,26 +154,40 @@ object GlassesCamera {
       onRetry: () -> Unit = {},
   ): Result {
     val t0 = System.currentTimeMillis()
-    // Logged, not merely gated: DAT reported Granted through a session in which every capture failed
-    // while Meta AI was re-prompting for camera access. That contradiction deserves evidence.
-    onLog("camera: DAT camera permission = ${permissionStatus()}")
-    if (!hasCameraPermission()) {
+    // One round-trip, not two. checkPermissionStatus is eventually-consistent AND can hang on a busy
+    // BT link (a barge-in just before capture is the documented case): the 2026-08-20 log printed
+    // "permission = unknown" from the first call, then spent 18 s on a second call that came back
+    // Granted, all billed as "session reached STARTED after 18570ms". Only an affirmative Denied
+    // aborts; an unanswered check is logged and the stream fails loudly if the grant is actually missing.
+    var permStatus: PermissionStatus? = null
+    var permErr: String? = null
+    Wearables.checkPermissionStatus(Permission.CAMERA)
+        .onSuccess { permStatus = it }
+        .onFailure { e, t -> permErr = datErr(e, t) }
+    onLog(
+        "camera: DAT camera permission = ${permStatus ?: "unknown"}" +
+            if (permErr != null) " ($permErr)" else "",
+    )
+    if (permStatus == PermissionStatus.Denied) {
       onLog("camera: FAILED (no permission) — grant glasses camera access in the app first")
       return Result.Failure(
           "I don't have camera access on the glasses yet — grant it in the app, then try again.",
-          "DAT camera permission not granted (Wearables.checkPermissionStatus(CAMERA) != Granted)",
+          "DAT camera permission not granted (Wearables.checkPermissionStatus(CAMERA) == Denied)",
       )
     }
+    val permMs = System.currentTimeMillis() - t0
+    if (permMs > 50) onLog("camera: permission check took ${permMs}ms")
 
     // Gate on the session actually being STARTED. A stream attached to a not-STARTED session just sits
     // in STARTING and times out — the real cause (glasses not eligible/ready) would otherwise be hidden
     // behind a generic "stream didn't reach STREAMING". This is the leading environmental failure.
     val sessionBefore = session.state.value
+    val sessionT0 = System.currentTimeMillis()
     val ready =
         withTimeoutOrNull(SESSION_READY_TIMEOUT_MS) {
           session.state.first { it == DeviceSessionState.STARTED }
         }
-    val sessionWaitMs = System.currentTimeMillis() - t0
+    val sessionWaitMs = System.currentTimeMillis() - sessionT0
     if (ready == null) {
       val reached = session.state.value
       onLog(
@@ -273,86 +295,31 @@ object GlassesCamera {
         )
       }
       onLog("camera: STREAMING after ${streamingMs}ms (attempt $attemptNo)")
-      // STREAMING is a state-machine transition, not proof a frame exists. Capturing the instant it
-      // flips is why capturePhoto returned a bare "Failed to capture photo": over Bluetooth the first
-      // frame lands well after the state does. Wait for an actual frame before asking for a still.
-      //
-      // And not just ONE frame: wait for the stream to be DELIVERING. This used to be a frame plus a
-      // fixed 1.5 s settle, and on the link where every still failed the settle bought nothing — the
-      // first frame arrived at 2.2 s and capturePhoto still needed a second attempt. A clock is the
-      // wrong instrument, because it says the same thing on a healthy 24 fps link and on a struggling
-      // one. A frame COUNT adapts by itself: STEADY_FRAMES arrive in ~300 ms when the link is fine and
-      // take seconds when it isn't, which is exactly when more waiting is what's wanted.
-      //
-      // Counted in ONE collection rather than a `first()` followed by a second subscription: whether
-      // re-collecting this flow is free is an SDK detail we would rather not depend on.
-      val frameT0 = System.currentTimeMillis()
-      var frames = 0
-      var firstFrameAt = 0L
-      withTimeoutOrNull(FIRST_FRAME_TIMEOUT_MS + STEADY_FRAMES_TIMEOUT_MS) {
-        s.videoStream.take(STEADY_FRAMES).collect {
-          frames++
-          if (frames == 1) firstFrameAt = System.currentTimeMillis()
-        }
-      }
-      val firstFrameMs = if (firstFrameAt == 0L) -1L else firstFrameAt - frameT0
-      val frameWaitMs = FIRST_FRAME_TIMEOUT_MS + STEADY_FRAMES_TIMEOUT_MS
-      if (frames == 0) {
+      val still = deliverStill(s, attemptNo, onLog)
+      if (still.frames == 0) {
         onLog(
-            "camera: FAILED (no frame within ${frameWaitMs}ms of STREAMING on attempt " +
+            "camera: FAILED (no frame within ${FIRST_FRAME_TIMEOUT_MS}ms of STREAMING on attempt " +
                 "$attemptNo; StreamState now ${s.state.value}, $STREAM_CFG_DESC)",
         )
         return Result.Failure(
             "The glasses camera started but sent no picture.",
-            "no video frame within ${frameWaitMs}ms of STREAMING on attempt $attemptNo " +
+            "no video frame within ${FIRST_FRAME_TIMEOUT_MS}ms of STREAMING on attempt $attemptNo " +
                 "(STREAMING reached after ${streamingMs}ms; no first frame received; $STREAM_CFG_DESC)",
         )
       }
-      val steadyMs = System.currentTimeMillis() - frameT0
-      onLog(
-          "camera: first frame after ${firstFrameMs}ms, $frames/$STEADY_FRAMES frames in ${steadyMs}ms " +
-              "(attempt $attemptNo)",
-      )
-      // Fewer frames than asked for means the wait timed out with the camera dribbling. Capture anyway
-      // — one frame is still a picture, and failing here would throw away a stream that might work —
-      // but say so, because "the still failed" reads very differently next to "the link gave us 2
-      // frames in 3 seconds".
-      if (frames < STEADY_FRAMES) {
-        onLog(
-            "camera: only $frames frame(s) before the deadline — the link is struggling; capturing anyway",
-        )
-      }
-      // Even with frames flowing the first capturePhoto can come back empty; a couple of in-stream
-      // retries are far cheaper (and likelier to work) than tearing the whole stream down.
-      var photo: PhotoData? = null
-      var capErr: String? = null
-      var capTries = 0
-      repeat(CAPTURE_ATTEMPTS) { n ->
-        if (photo != null) return@repeat
-        capTries = n + 1
-        if (n > 0) {
-          onLog(
-              "camera: capturePhoto retry ${n + 1}/$CAPTURE_ATTEMPTS (frames flowing, stream attempt " +
-                  "$attemptNo)",
-          )
-          delay(CAPTURE_RETRY_DELAY_MS)
-        }
-        s.capturePhoto()
-            .onSuccess { photo = it }
-            .onFailure { e, t -> capErr = datErr(e, t) }
-      }
       val captured =
-          photo
+          still.photo
               ?: run {
                 onLog(
-                    "camera: FAILED (capturePhoto ×$capTries on attempt $attemptNo) — $capErr " +
-                        "($STREAM_CFG_DESC)",
+                    "camera: FAILED (capturePhoto ×${still.tries} on attempt $attemptNo) — " +
+                        "${still.lastError} ($STREAM_CFG_DESC)",
                 )
                 return Result.Failure(
                     "The glasses took the shot but I couldn't read it.",
-                    "capturePhoto failed after $capTries attempt(s) on stream attempt $attemptNo " +
-                        "(first frame after ${firstFrameMs}ms, then $frames/$STEADY_FRAMES frames in " +
-                        "${steadyMs}ms; $STREAM_CFG_DESC): $capErr",
+                    "capturePhoto failed after ${still.tries} attempt(s) on stream attempt " +
+                        "$attemptNo (first frame after ${still.firstFrameMs}ms, then " +
+                        "${still.frames}/$STEADY_FRAMES frames in ${still.steadyMs}ms; " +
+                        "$STREAM_CFG_DESC): ${still.lastError}",
                     // The camera worked — frames arrived. A fresh stream would add nothing here.
                     streamStarted = true,
                 )
@@ -385,32 +352,155 @@ object GlassesCamera {
               }
       return Result.Success(encoded)
     } finally {
-      // stop() ends streaming but LEAVES the capability attached to the session, and the glasses
-      // expose exactly one camera stream per session — so the retry's addStream got a stream that
-      // could never reach STREAMING (the 20s timeout on attempt 2 in the logs). Remove the
-      // capability so the next attempt starts from a clean slot.
-      // Both calls used to be bare runCatching, so a FAILING teardown was invisible — and a failing
-      // teardown is exactly the state in which every later capture in the call is stuck before
-      // STREAMING, which is what the device log showed. Report both, then WAIT for the stream to leave
-      // STREAMING before returning: re-adding into a slot that is still draining is a race we were
-      // losing 750 ms later. Bounded, and logged whenever it isn't instant.
-      runCatching { s.stop() }.onFailure { onLog("camera: stop() failed on attempt $attemptNo — $it") }
-      runCatching { session.removeStream() }
-          .onFailure { onLog("camera: removeStream() failed on attempt $attemptNo — $it") }
-      val releaseT0 = System.currentTimeMillis()
-      val released =
-          withTimeoutOrNull(RELEASE_TIMEOUT_MS) { s.state.first { it != StreamState.STREAMING } }
-      val releaseMs = System.currentTimeMillis() - releaseT0
-      if (released == null) {
-        onLog(
-            "camera: stream did NOT release within ${RELEASE_TIMEOUT_MS}ms after teardown on attempt " +
-                "$attemptNo (still ${s.state.value}) — the next capture may find the slot busy",
-        )
-      } else if (releaseMs > 50) {
-        onLog("camera: stream released as $released after ${releaseMs}ms (attempt $attemptNo)")
+      // NonCancellable, and that is not incidental. A capture is cancellable now — "stop" mid-photo
+      // aborts it — and a cancelled coroutine cannot suspend, so an ordinary teardown here would run
+      // s.stop() and then die on the release wait, leaving the one camera slot draining with nobody
+      // watching. That is precisely the state the comment below describes as wedging every later
+      // capture in the call. Teardown is the part that MUST finish, whatever the reason for leaving.
+      withContext(NonCancellable) {
+        // stop() ends streaming but LEAVES the capability attached to the session, and the glasses
+        // expose exactly one camera stream per session — so the retry's addStream got a stream that
+        // could never reach STREAMING (the 20s timeout on attempt 2 in the logs). Remove the
+        // capability so the next attempt starts from a clean slot.
+        // Both calls used to be bare runCatching, so a FAILING teardown was invisible — and a failing
+        // teardown is exactly the state in which every later capture in the call is stuck before
+        // STREAMING, which is what the device log showed. Report both, then WAIT for the stream to
+        // leave STREAMING before returning: re-adding into a slot that is still draining is a race we
+        // were losing 750 ms later. Bounded, and logged whenever it isn't instant.
+        runCatching { s.stop() }
+            .onFailure { onLog("camera: stop() failed on attempt $attemptNo — $it") }
+        runCatching { session.removeStream() }
+            .onFailure { onLog("camera: removeStream() failed on attempt $attemptNo — $it") }
+        val releaseT0 = System.currentTimeMillis()
+        val released =
+            withTimeoutOrNull(RELEASE_TIMEOUT_MS) { s.state.first { it != StreamState.STREAMING } }
+        val releaseMs = System.currentTimeMillis() - releaseT0
+        if (released == null) {
+          onLog(
+              "camera: stream did NOT release within ${RELEASE_TIMEOUT_MS}ms after teardown on " +
+                  "attempt $attemptNo (still ${s.state.value}) — the next capture may find the slot busy",
+          )
+        } else if (releaseMs > 50) {
+          onLog("camera: stream released as $released after ${releaseMs}ms (attempt $attemptNo)")
+        }
       }
     }
   }
+
+  /** What one open stream managed to produce: the still, or why not, plus the frame evidence. */
+  private class Still(
+      val photo: PhotoData?,
+      val lastError: String?,
+      val tries: Int,
+      val frames: Int,
+      val firstFrameMs: Long,
+      val steadyMs: Long,
+  )
+
+  /**
+   * Wait for the stream to be DELIVERING, then take the still — WITHOUT letting go of the frames.
+   *
+   * STREAMING is a state-machine transition, not proof a frame exists. Capturing the instant it flips
+   * is why capturePhoto returned a bare "Failed to capture photo": over Bluetooth the first frame
+   * lands well after the state does. And not just ONE frame — this used to be a frame plus a fixed
+   * 1.5 s settle, and on the link where every still failed the settle bought nothing (first frame at
+   * 2.2 s, capturePhoto still needed a second attempt). A clock says the same thing on a healthy 24
+   * fps link and on a struggling one; a frame COUNT adapts by itself, arriving in ~300 ms when the
+   * link is fine and taking seconds when it isn't, which is exactly when more waiting is wanted.
+   *
+   * The settle clock starts at the FIRST FRAME, not at STREAMING. A combined deadline billed the
+   * first-frame wait against the settle: 8.2 s to first frame left 2.8 s for the rest, we shot at
+   * 6/8, and capturePhoto ×3 failed while frames recovered underneath (14, then 24).
+   *
+   * THE COLLECTOR STAYS SUBSCRIBED ACROSS THE CAPTURE, and that is the change this helper exists
+   * for. The count used to come from `videoStream.take(STEADY_FRAMES).collect {}`, which CANCELS the
+   * subscription the moment the eighth frame arrives — so every capturePhoto was issued against a
+   * stream nobody was reading, and on 2026-08-20 a link that had just delivered 8 frames in 672 ms
+   * needed three tries to produce one still. Whether an unobserved stream keeps delivering is an SDK
+   * detail we would rather not bet a photo on, so the pump runs until the still is in hand.
+   */
+  private suspend fun deliverStill(s: Stream, attemptNo: Int, onLog: (String) -> Unit): Still =
+      coroutineScope {
+        val frameT0 = System.currentTimeMillis()
+        val frames = AtomicInteger(0)
+        val firstFrameAt = AtomicLong(0L)
+        val first = CompletableDeferred<Unit>()
+        val steady = CompletableDeferred<Unit>()
+        val pump =
+            launch(start = CoroutineStart.UNDISPATCHED) {
+              s.videoStream.collect {
+                val n = frames.incrementAndGet()
+                if (n == 1) {
+                  firstFrameAt.set(System.currentTimeMillis())
+                  first.complete(Unit)
+                }
+                if (n >= STEADY_FRAMES) steady.complete(Unit)
+              }
+            }
+        try {
+          withTimeoutOrNull(FIRST_FRAME_TIMEOUT_MS) { first.await() }
+          if (frames.get() == 0) {
+            return@coroutineScope Still(null, null, 0, 0, -1L, System.currentTimeMillis() - frameT0)
+          }
+          withTimeoutOrNull(STEADY_FRAMES_TIMEOUT_MS) { steady.await() }
+          val seen = frames.get()
+          val firstFrameMs = firstFrameAt.get() - frameT0
+          val steadyMs = System.currentTimeMillis() - frameT0
+          onLog(
+              "camera: first frame after ${firstFrameMs}ms, $seen/$STEADY_FRAMES frames in " +
+                  "${steadyMs}ms (attempt $attemptNo)",
+          )
+          // Fewer frames than asked for means the wait timed out with the camera dribbling. Capture
+          // anyway — one frame is still a picture, and failing here would throw away a stream that
+          // might work — but say so, because "the still failed" reads very differently next to "the
+          // link gave us 2 frames in 3 seconds".
+          if (seen < STEADY_FRAMES) {
+            onLog(
+                "camera: only $seen frame(s) after ${STEADY_FRAMES_TIMEOUT_MS}ms from the first " +
+                    "frame — the link is struggling; capturing anyway",
+            )
+          }
+          // Even with frames flowing a capturePhoto can come back empty; a couple of in-stream
+          // retries are far cheaper (and likelier to work) than tearing the whole stream down.
+          var photo: PhotoData? = null
+          var capErr: String? = null
+          var tries = 0
+          repeat(CAPTURE_ATTEMPTS) { n ->
+            if (photo != null) return@repeat
+            // The user can say "stop" mid-capture, and until this check the retries ran on regardless
+            // — the abort reached the agent while the glasses carried on taking a picture nobody
+            // wanted. capturePhoto itself is an SDK call with no cancellation of its own, so this is
+            // the last point at which stopping is still cheap.
+            currentCoroutineContext().ensureActive()
+            tries = n + 1
+            if (n > 0) {
+              val before = frames.get()
+              onLog(
+                  "camera: capturePhoto retry ${n + 1}/$CAPTURE_ATTEMPTS (stream attempt " +
+                      "$attemptNo, $before frames so far)",
+              )
+              withTimeoutOrNull(CAPTURE_RETRY_DELAY_MS) {
+                while (frames.get() < before + CAPTURE_RETRY_FRAMES) delay(50)
+              }
+            }
+            s.capturePhoto()
+                .onSuccess { photo = it }
+                .onFailure { e, t ->
+                  capErr = datErr(e, t)
+                  // Logged PER ATTEMPT, not only once every attempt has failed. The reason was
+                  // previously kept until the whole capture gave up, so a capture that succeeded on
+                  // its third try — the common shape on a cold camera — reported that it had retried
+                  // and never said why, which is exactly the question a reader has.
+                  onLog(
+                      "camera: capturePhoto attempt ${n + 1}/$CAPTURE_ATTEMPTS failed — $capErr",
+                  )
+                }
+          }
+          Still(photo, capErr, tries, frames.get(), firstFrameMs, steadyMs)
+        } finally {
+          pump.cancel()
+        }
+      }
 
   private fun toBitmap(photo: PhotoData, onLog: (String) -> Unit): Bitmap? =
       when (photo) {

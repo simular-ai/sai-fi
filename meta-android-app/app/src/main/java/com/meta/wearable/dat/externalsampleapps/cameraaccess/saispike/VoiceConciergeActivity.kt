@@ -9,8 +9,8 @@
 // CallController.state and issues commands. Once a call is running, everything else is meant to happen
 // by voice (and the glasses temple button) — the phone is just machine + on/off.
 //
-// Auth is in-app Google Sign-In (SaiAuth) → a Firebase ID token sent as the Bearer to cloud-api; there
-// is no compiled-in credential. Point CONCIERGE_URL at a PR-staging cloud-api to test a PR.
+// Auth is in-app Google Sign-In (SaiAuth) → a Firebase ID token sent as the Bearer to the Sai API;
+// there is no compiled-in credential. SAI_API_URL defaults to production.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 
@@ -254,7 +254,7 @@ class VoiceConciergeActivity : ComponentActivity() {
 
   /** Human-readable machines-load failure: always states HTTP status or that none was received. */
   private fun machinesLoadFailure(e: Throwable): Pair<String, String> {
-    val url = "${BuildConfig.CONCIERGE_URL.trimEnd('/')}/v1/agents/machines"
+    val url = "${BuildConfig.SAI_API_URL.trimEnd('/')}/v1/agents/machines"
     return when (e) {
       is ConciergeHttpException ->
           "HTTP ${e.status}" to
@@ -333,7 +333,7 @@ class VoiceConciergeActivity : ComponentActivity() {
   /** Off unless this is a DEBUG build with a presenter URL — otherwise there's nowhere to send frames. */
   private fun presenterEnabled() =
       BuildConfig.DEBUG &&
-          PresenterSocket.resolveUrl(BuildConfig.PRESENTER_URL, BuildConfig.CONCIERGE_URL).isNotBlank()
+          PresenterSocket.resolveUrl(BuildConfig.PRESENTER_URL, BuildConfig.SAI_API_URL).isNotBlank()
 
   // Separate BT gate for DAT registration (its grant kicks off registration, not routing).
   private val datBtPermission =
@@ -666,11 +666,46 @@ class VoiceConciergeActivity : ComponentActivity() {
   }
 
   /** Upgrade-only: promote to granted if DAT confirms it, but never downgrade on a stale/laggy read. */
+  /**
+   * Re-read the DAT camera grant, and let it go DOWN as well as up.
+   *
+   * It used to only ever upgrade, and nothing anywhere cleared the stored flag — so the first grant a
+   * device ever saw was permanent as far as this app was concerned. That is fine until the grant stops
+   * being true underneath us, which happens for at least three ordinary reasons: Meta AI's flow offers
+   * "allow once", a glasses firmware update can leave the permission unavailable until it completes,
+   * and the user can revoke it in Meta AI. In every one of those the capture fails and the **"Grant
+   * glasses camera" button is hidden**, because Home only draws it when the app believes the permission
+   * is missing. Device 2026-08-20: a denied capture with no control anywhere to fix it, short of
+   * clearing app data.
+   *
+   * Downgraded only on an AFFIRMATIVE [PermissionStatus.Denied] — never on a null, a failure, or a
+   * status this build does not know. That is the same distinction the grant button already makes for
+   * the link (`enabled = ui.glassesLinked != false`), and it is what keeps the original reason for
+   * upgrade-only intact: DAT's `checkPermissionStatus` is laggy right after registration, and treating
+   * "not answered yet" as a denial would flicker away a grant the user does have.
+   */
   private fun refreshGlassesCameraStatus() {
     lifecycleScope.launch {
-      val status = Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()
-      if (status == PermissionStatus.Granted) markGlassesCameraGranted()
+      when (Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()) {
+        PermissionStatus.Granted -> markGlassesCameraGranted()
+        PermissionStatus.Denied -> clearGlassesCameraGranted()
+        // Unknown, or an error reaching DAT: keep what was last confirmed.
+        else -> {}
+      }
     }
+  }
+
+  /**
+   * Forget a grant DAT says we no longer have, so the grant button comes back.
+   *
+   * Deliberately does NOT clear the auto-prompt flag: the one automatic request is spent whatever
+   * happened to it, and re-prompting on every resume for a permission the user may have declined on
+   * purpose is the behaviour that flag exists to prevent. Re-granting is a button press from here.
+   */
+  private fun clearGlassesCameraGranted() {
+    if (!glassesCameraGranted && !Prefs.glassesCameraGranted(this)) return
+    glassesCameraGranted = false
+    Prefs.setGlassesCameraGranted(this, false)
   }
 
   private fun refreshAuthState() {
@@ -775,15 +810,15 @@ class VoiceConciergeActivity : ComponentActivity() {
         selectedMachine = null
         // A null token means one of two different things, and they need different sentences. If
         // `currentUser` is gone the session really is over and "sign in" is the answer. If it is
-        // there, the user IS signed in and the token *refresh* is what failed — offline, no VPN, or
-        // a revoked refresh token — and telling them to sign in sends them looking for a button the
+        // there, the user IS signed in and the token *refresh* is what failed — offline, or a
+        // revoked refresh token — and telling them to sign in sends them looking for a button the
         // signed-in UI doesn't show. Same distinction `startServiceNow` already makes.
         if (SaiAuth.isSignedIn()) {
           showMachinesError(
               "Couldn't refresh your sign-in token, so the machine list can't load.\n" +
                   "You are still signed in — this is the token refresh failing, not the session. " +
-                  "Check the connection (on staging that means the VPN) and hit Reload; if it keeps " +
-                  "failing, sign out in Settings and sign in again.",
+                  "Check the connection and hit Reload; if it keeps failing, sign out in Settings " +
+                  "and sign in again.",
               "Sign-in token refresh failed",
           )
         } else {
@@ -792,8 +827,19 @@ class VoiceConciergeActivity : ComponentActivity() {
         }
         return@launch
       }
+      if (BuildConfig.SAI_API_URL.isBlank()) {
+        machines.clear()
+        selectedMachine = null
+        machinesFetchOk = false
+        showMachinesError(
+            "sai_api_url is empty. Set it in meta-android-app/local.properties " +
+                "(https://api.sai.simular.ai) and rebuild.",
+            "No sai_api_url",
+        )
+        return@launch
+      }
       try {
-        val list = ConciergeClient.listMachines(BuildConfig.CONCIERGE_URL, token)
+        val list = ConciergeClient.listMachines(BuildConfig.SAI_API_URL, token)
         machines.clear()
         machines.addAll(list)
         if (selectedMachine == null || machines.none { it.machineId == selectedMachine?.machineId }) {
@@ -859,7 +905,7 @@ class VoiceConciergeActivity : ComponentActivity() {
       CallController.start(
           this@VoiceConciergeActivity,
           CallController.StartParams(
-              baseUrl = BuildConfig.CONCIERGE_URL,
+              baseUrl = BuildConfig.SAI_API_URL,
               token = token,
               machineId = m.machineId,
               machineLabel = m.label,

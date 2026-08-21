@@ -1,13 +1,9 @@
 /* sai-fi — voice concierge. */
 
-// The catalog. Ported from cloud-api `core/golden/scenarios.ts`, scenario for scenario.
+// The catalog.
 //
-// Names AND steps match the TypeScript exactly. Names reconcile against
-// docs/plans/golden-catalog-inventory.md in the server repo; steps matter just as much, because a
-// scenario reconstructed from its name alone passes while asserting something the server never
-// tested. That is a false green, and the name check cannot see it.
-//
-// Assert the EFFECT and STATE layer, never phrasing.
+// Assert the EFFECT and STATE layer, never phrasing. Names are stable so a catalog change is a
+// reviewable diff; PORTED_SCENARIO_COUNT pins the size so a dropped scenario cannot go unnoticed.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm
 
@@ -16,8 +12,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
-/** Bumped as scenarios land. Must reach 62 before the TypeScript catalog is deleted. */
-const val PORTED_SCENARIO_COUNT = 59
+/**
+ * The size of the catalog, asserted so a dropped scenario cannot go unnoticed.
+ * Some scenarios were found on the device rather than inherited. This number is only here to make
+ * a deletion loud.
+ */
+const val PORTED_SCENARIO_COUNT = 63
 
 private fun forwardTexts(ctx: GoldenCtx) =
     ctx.agent.callsTo("forwardTask").map { it.args["text"] as String }
@@ -178,17 +178,22 @@ val GOLDEN_SCENARIOS: List<Scenario> =
         ),
         Scenario(
             name = "S4e interrupt closes the turn out",
-            guards = "abort emits no agent event — the FSM must not sit in `working` forever",
+            guards = "nothing else closes an aborted turn — the FSM must not sit in `working` forever",
             // The stranding half of the same device bug: `interrupt` used to abort and change
-            // nothing, so no complete/error/idle could ever arrive (the reader is torn down). The
-            // FSM stayed `working`, the approval stayed pending, and the queued task could never
-            // drain — a drain needs `idle`. She spent the rest of the call saying she was "still
-            // waiting" for a dead task.
+            // nothing, so no complete/error/idle could ever arrive. The FSM stayed `working`, the
+            // approval stayed pending, and the queued task could never drain — a drain needs
+            // `idle`. It spent the rest of the call saying it was "still waiting" for a dead task.
+            //
+            // "No event arrives" is a CONSEQUENCE of `abort()` stopping the device following the
+            // turn, and it was for a long time merely assumed: nothing tore the reader down, so an
+            // aborted turn was read to its natural end and its result announced. Closing the turn
+            // out here is still required, because nothing else does it — see
+            // VoiceSession.stopFollowingTurn for the other half.
             //
             // The queue going too is the INVERSE of the old behaviour. An abort used to RELEASE the
             // queue, which was right while the only way to be queued was to be blocked behind an
             // approval; with admission queueing by default it inverts into "stop" starting the next
-            // task seconds after she confirms everything is stopped.
+            // task seconds after it confirms everything is stopped.
             steps =
                 listOf(
                     effects(effect("forwardToAgent", "text" to "book a table")),
@@ -526,7 +531,7 @@ val GOLDEN_SCENARIOS: List<Scenario> =
               assertEquals(listOf("forwardTask", "steer"), callLog(ctx)) // no resolveApproval
               assertEquals("still awaiting a real choice", "a-c", ctx.state.pendingApprovalId)
               // The steer cannot be READ until the choice resolves, so the frame has to survive it
-              // and the model has to be told — otherwise she reports a wait on someone else and the
+              // and the model has to be told — otherwise it reports a wait on someone else and the
               // call dies.
               assertEquals(Mode.AWAITING_USER, ctx.state.mode)
               assertTrue(ctx.voice.instructed.last().contains("BLOCKED"))
@@ -847,8 +852,8 @@ val GOLDEN_SCENARIOS: List<Scenario> =
               val s = ctx.status()
               assertTrue(s, s.contains("Still working"))
               assertTrue(s, s.contains("NOT STARTED YET"))
-              assertTrue("named, so she can name it", s.contains("book a table for tonight"))
-              // The running task must not appear in the waiting list, or she reports it twice.
+              assertTrue("named, so it can name it", s.contains("book a table for tonight"))
+              // The running task must not appear in the waiting list, or it reports it twice.
               assertFalse(s, s.contains("\"check my unread emails\""))
               assertEquals("check my unread emails", ctx.sessionStates.last().running)
               assertEquals(listOf("book a table for tonight"), ctx.sessionStates.last().queued)
@@ -871,7 +876,7 @@ val GOLDEN_SCENARIOS: List<Scenario> =
         ),
         Scenario(
             name = "S42 a turn parked on the user reads as blocked, not as working",
-            guards = "device 2026-07-31 — she reported waiting on a third party for her own question",
+            guards = "device 2026-07-31 — it reported waiting on a third party for its own question",
             steps =
                 listOf(
                     effects(
@@ -888,9 +893,9 @@ val GOLDEN_SCENARIOS: List<Scenario> =
             assert = { ctx ->
               val s = ctx.status()
               assertTrue(s, s.contains("BLOCKED ON THE USER"))
-              assertTrue("the actual question, so she can re-ask it", s.contains("CÉ LA VI, or LAVO?"))
+              assertTrue("the actual question, so it can re-ask it", s.contains("CÉ LA VI, or LAVO?"))
               assertTrue(s.contains("never say you're waiting to hear back from anyone else"))
-              assertFalse("the thing she used to say, wrongly", s.contains("Still working"))
+              assertFalse("the thing it used to say, wrongly", s.contains("Still working"))
             },
         ),
         Scenario(
@@ -961,7 +966,7 @@ val GOLDEN_SCENARIOS: List<Scenario> =
                 ),
             assert = { ctx ->
               assertTrue(callLog(ctx).contains("abort"))
-              // Left in the queue, the next idle event would drain it seconds after she confirmed
+              // Left in the queue, the next idle event would drain it seconds after it confirmed
               // everything was stopped — so "stop" would start a task.
               assertEquals(1, ctx.agent.callsTo("forwardTask").size)
               assertEquals(0, ctx.state.queue.size)
@@ -1102,7 +1107,7 @@ val GOLDEN_SCENARIOS: List<Scenario> =
               assertTrue(nudge, nudge.contains("does NOT say which of them raised it"))
               // Model-facing only: the user must never hear this read out.
               assertFalse(ctx.spokenHas("does NOT say which"))
-              // It hands over both, as data, so she can describe rather than attribute.
+              // It hands over both, as data, so it can describe rather than attribute.
               assertTrue(nudge.contains("check my unread emails"))
               assertTrue(nudge.contains("book a table for tonight"))
             },
@@ -1141,12 +1146,15 @@ val GOLDEN_SCENARIOS: List<Scenario> =
         Scenario(
             name = "S59 starting fresh rotates the conversation when nothing is outstanding",
             guards = "voice has a session of its own, so it must be resettable without touching the desktop",
-            steps = listOf(effects(effect("resetSession"))),
+            // TWO calls, because the first only asks — see S63. The rotation itself is what this
+            // scenario is about, so it confirms and then checks the wipe went through.
+            steps = listOf(effects(effect("resetSession")), effects(effect("resetSession"))),
             assert = { ctx ->
               assertTrue(callLog(ctx).contains("resetSession"))
               assertTrue(ctx.spokenHas("fresh start"))
               assertEquals(emptyList<String>(), ctx.state.inFlight)
               assertEquals(0, ctx.state.queue.size)
+              assertNull("consumed, so the NEXT reset asks again", ctx.state.resetConfirmAsked)
             },
         ),
         Scenario(
@@ -1196,6 +1204,97 @@ val GOLDEN_SCENARIOS: List<Scenario> =
               assertEquals(listOf("check my unread emails"), ctx.state.queue.map { it.text })
               assertTrue(ctx.spokenHas("is still waiting"))
               assertTrue(ctx.spokenHas("check my unread emails"))
+            },
+        ),
+        Scenario(
+            name = "S63 a first resetSession only asks — nothing is wiped",
+            guards = "device 2026-08-20 — a bare \"forget it\" was heard as \"forget everything\"",
+            // The user had just said "actually forget the table booking", then a moment later "forget
+            // it". The second went to `resetSession` and took the whole conversation with it, which is
+            // not a thing that can be undone or even noticed until it has forgotten who it is
+            // talking to. "Forget it", "never mind" and "drop that" share their vocabulary with
+            // "forget everything we talked about" and mean something completely different, so a
+            // rotation now costs one question — the cheapest possible insurance against the worst
+            // available outcome.
+            steps = listOf(effects(effect("resetSession"))),
+            assert = { ctx ->
+              assertFalse("the conversation is intact", callLog(ctx).contains("resetSession"))
+              assertEquals(true, ctx.state.resetConfirmAsked)
+              // Held as an INSTRUCTION, not spoken: the model asks in its own words, and a scripted
+              // line here would be said on top of it.
+              assertTrue(ctx.instructedHas("NOTHING has been reset"))
+              assertFalse("nothing to announce yet", ctx.spokenHas("fresh start"))
+            },
+        ),
+        Scenario(
+            name = "S64 a new task clears the reset confirmation",
+            guards = "an old \"are you sure?\" must not authorise a wipe minutes and a task later",
+            // The same shape as S57's guard on interruptScopeAsked, and the same reasoning: the flag
+            // is consent to ONE question just asked. Left standing, a stray `resetSession` later in
+            // the call reads as the answer to a question the user has long since moved on from.
+            steps =
+                listOf(
+                    effects(effect("resetSession")), // asks
+                    effects(effect("forwardToAgent", "text" to "check my unread emails")),
+                    Step.Agent(AgentEvent.Complete("Nothing new.")),
+                    effects(effect("resetSession")), // must ASK again
+                ),
+            assert = { ctx ->
+              assertFalse(callLog(ctx).contains("resetSession"))
+              assertEquals("re-asked, freshly", true, ctx.state.resetConfirmAsked)
+            },
+        ),
+        Scenario(
+            name = "S64b anything else the model does clears the reset confirmation too",
+            guards = "a wipe must not be authorised by a question the user answered NO to",
+            // S64 covers the flag expiring behind a new TASK, which `startTurn` has always done. The
+            // hole it leaves is the likelier half of the same story, because the expected answer to
+            // "wipe everything, or just drop that?" is NO: the user says "just drop that", the model
+            // does something else entirely, and nothing about that path starts a turn. Left to
+            // `startTurn` alone the yes-flag simply waited — and the next stray "forget it", minutes
+            // and subjects later, spent it on a conversation the user wanted to keep.
+            //
+            // Any batch that is not another `resetSession` is the user having moved on. Asking twice
+            // costs a sentence; not asking costs the conversation, so the tie breaks one way.
+            steps =
+                listOf(
+                    effects(effect("resetSession")), // asks
+                    effects(effect("cancelQueued")), // "no — just drop that thing I mentioned"
+                    effects(effect("resetSession")), // must ASK again, not rotate
+                ),
+            assert = { ctx ->
+              assertFalse("the conversation was wiped on a stale yes", callLog(ctx).contains("resetSession"))
+              assertEquals("re-asked, freshly", true, ctx.state.resetConfirmAsked)
+            },
+        ),
+        Scenario(
+            name = "S65 interrupt scope running drops the task and starts the next",
+            guards = "device 2026-08-20 — \"forget it\" had no way to mean THIS one and not the lot",
+            // The gap the scope was added for. "Forget it" / "skip it" / "move on" is about the task
+            // in hand, and the only tools that existed were a relay (drop PART of a running task) and
+            // an unscoped interrupt (drop everything, queue included). Neither is "drop this one and
+            // get on with the next", so the model had to choose between doing too little and doing
+            // far too much — and on device it reached past both for `resetSession`.
+            steps =
+                listOf(
+                    effects(effect("forwardToAgent", "text" to "summarise my downloads folder")),
+                    effects(effect("enqueue", "task" to "book a table", "urgency" to "normal")),
+                    effects(effect("interrupt", "scope" to "running")),
+                ),
+            assert = { ctx ->
+              // Aborted once, and the queued task went out immediately after: two forwards total.
+              assertEquals(1, ctx.agent.callsTo("abort").size)
+              assertEquals(
+                  listOf("summarise my downloads folder", "book a table"), forwardTexts(ctx))
+              assertEquals("the waiting task is now the running one", Mode.WORKING, ctx.state.mode)
+              assertEquals(listOf("book a table"), ctx.state.inFlight)
+              assertEquals(0, ctx.state.queue.size)
+              // Said, and said accurately: what stopped, and what is now underway. A user who is told
+              // only "stopped" cannot tell this apart from an unscoped interrupt.
+              assertTrue(ctx.spokenHas("summarise my downloads folder"))
+              assertTrue(ctx.spokenHas("book a table"))
+              // No ask: with one thing running there is nothing ambiguous to ask about.
+              assertNull(ctx.state.interruptScopeAsked)
             },
         ),
     )

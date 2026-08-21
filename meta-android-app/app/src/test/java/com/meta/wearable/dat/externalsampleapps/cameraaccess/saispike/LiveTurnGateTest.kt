@@ -3,10 +3,9 @@
 // The turn/nudge gate: whether a nudge reaches the model, when, and whether it is lost.
 //
 // This machine had no test at all until it was extracted from GeminiLiveClient, and two bugs are on
-// record in it — both of them a completion the user never heard. Each gets a named test here
-// (`a barge-in then a session replacement…` and `a generation that ends without a turn…`), and each
-// was checked by reintroducing the bug and watching the test go red. A test for a bug that cannot
-// fail is not a test.
+// record in it. Each gets a named test here (`a barge-in then a session replacement…` and `a
+// generation that ends without a turn does not flush…`), and each was checked by reintroducing the
+// bug and watching the test go red. A test for a bug that cannot fail is not a test.
 //
 // Log strings are asserted verbatim in places. That is deliberate: ON_DEVICE_CHECK.md tells a human
 // to grep for `→ nudge:` / `← nudge:` / `✗ nudge:` while wearing the glasses, so those strings are a
@@ -79,28 +78,205 @@ class LiveTurnGateTest {
   }
 
   @Test
-  fun `a generation that ends without a turn still releases the held nudge`() {
+  fun `a generation that ends without a turn does not flush a held nudge into its own speech`() {
     val f = Fixture().ready().speaking()
 
     f.gate.injectNudge("complete", "[agent] the task finished")
 
-    // `generationComplete` with no `turnComplete` — the shape that used to leave `modelSpeaking`
-    // stuck true and defer every later nudge behind it, silently, for the rest of the call.
+    // `generationComplete` with no `turnComplete` used to flush here. That is barge-in: Gemini Live
+    // treats a client turn as interrupt, and this generation is often the function-call one, which
+    // ends before it has said the sentence the nudge is trying not to talk over.
     val ended = f.gate.onGenerationOrTurnEnd(generationEnded = true, turnEnded = false)
 
-    assertEquals(listOf("[agent] the task finished"), ended.sent())
+    assertTrue("must not SendTurn on generationComplete", ended.sent().isEmpty())
+    assertTrue(ended.filterIsInstance<GateAction.TurnComplete>().isEmpty())
+    assertTrue("it is still on the floor until turnComplete", f.gate.isModelSpeaking)
+
+    // And the completion is not lost — it waits for the real turn boundary.
+    val flushed = f.gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true)
+    assertTrue(flushed.sent().single().endsWith("[agent] the task finished"))
     assertEquals(
         listOf("← nudge: delivering complete (held during the turn)"),
+        flushed.logs(),
+    )
+  }
+
+  // ── The in-flight window (device 2026-08-20) ─────────────────────────────────────────────────────
+
+  @Test
+  fun `a nudge sent moments after another is held, not fired into the turn it would cut off`() {
+    // The greeting-plus-wake failure, exactly as it happened: the wake announcement landed ~200 ms
+    // after the greeting on a hibernated machine, `modelSpeaking` was still false because no frame had
+    // arrived yet, so the second nudge went straight out and interrupted the turn the first started.
+    // `— barge-in —` before Sai had made a sound, on every call.
+    val f = Fixture().ready()
+
+    assertEquals(listOf("greeting"), f.gate.injectNudge("greeting", "greeting").sent())
+    assertFalse("no frame has arrived, so this is not what protects the turn", f.gate.isModelSpeaking)
+
+    f.now += 200
+    val wake = f.gate.injectNudge("speak:machine-state", "waking")
+    assertTrue("must not go out into an in-flight turn", wake.sent().isEmpty())
+    assertEquals(listOf("→ nudge: speak:machine-state — held until the turn ends"), wake.logs())
+
+    // And it is delivered on the turn boundary, not lost.
+    val ended = f.gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true)
+    assertTrue(ended.sent().single().endsWith("waking"))
+  }
+
+  @Test
+  fun `a tool call holds the line the FSM speaks in reply to it`() {
+    // The 2026-08-20 device call, where every single one of Sai's sentences was marked `— cut off —`.
+    // The user speaks, so the turn is the MODEL's and no client turn armed the window; the model emits
+    // `forwardToAgent` before it has produced a frame, so `modelSpeaking` is false too. The FSM then
+    // answers that very forward with the queue-position line, and it went out into the turn that was
+    // about to say "I'm on it" — the gate had no way to know a generation was underway.
+    val f = Fixture().ready()
+    f.gate.onToolCall()
+    assertFalse("no frame has arrived, so this is not what protects the turn", f.gate.isModelSpeaking)
+
+    val queued = f.gate.injectNudge("speak:queue-position", "[system] say you'll get to it after")
+    assertTrue("must not cut off the turn that made the call", queued.sent().isEmpty())
+    assertEquals(
+        listOf("→ nudge: speak:queue-position — held until the turn ends"),
+        queued.logs(),
+    )
+
+    // The function-call generation completing is NOT the moment to send it — that is the barge-in
+    // in the device log. It waits for the spoken turn to actually end.
+    assertTrue(
+        "generationComplete after a tool call must not flush into the ack that has not started",
+        f.gate.onGenerationOrTurnEnd(generationEnded = true, turnEnded = false).sent().isEmpty(),
+    )
+
+    // Delivered when the model finishes the sentence it was making the call in aid of — the whole
+    // point being that it is late, not lost. (Sai did not speak this turn, so the FSM line is the
+    // only acknowledgment the user will hear.)
+    val ended = f.gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true)
+    assertTrue(ended.sent().single().endsWith("say you'll get to it after"))
+  }
+
+  @Test
+  fun `a queue-position held while Sai already spoke is dropped, not flushed into its own sentence`() {
+    // Device 2026-08-20: the model said "I'll start that as soon as the downloads are done", the
+    // FSM's verbatim queue line flushed on generationComplete, barged it off, and it said it again.
+    val f = Fixture().ready()
+    f.gate.onToolCall()
+    f.gate.injectNudge("speak:queue-position", "[system] Say verbatim: I'll start that as soon as I'm done")
+    // The function-call generation ends first, with no speech yet. Flushing here is the interrupt.
+    assertTrue(f.gate.onGenerationOrTurnEnd(generationEnded = true, turnEnded = false).sent().isEmpty())
+    f.gate.onSaiTranscript("I'll start that as soon as the downloads are done.")
+
+    val ended = f.gate.onGenerationOrTurnEnd(generationEnded = true, turnEnded = true)
+    assertTrue("must not send a client turn into its own sentence", ended.sent().isEmpty())
+    assertEquals(
+        listOf("✗ nudge: dropping speak:queue-position — Sai already said it this turn"),
         ended.logs(),
     )
-    assertFalse("the turn is over, so the gate must reopen", f.gate.isModelSpeaking)
+  }
 
-    // The turn did not end, so the transcript entry is NOT finalized — only a real turn boundary
-    // does that.
-    assertTrue(ended.filterIsInstance<GateAction.TurnComplete>().isEmpty())
+  @Test
+  fun `a cancel line held while Sai already spoke is dropped the same way`() {
+    val f = Fixture().ready()
+    f.gate.onToolCall()
+    f.gate.injectNudge("speak", "[system] Say verbatim: that one hadn't started yet")
+    f.gate.onSaiTranscript("No problem, that one hadn't started yet.")
 
-    // And the gate is genuinely open again: the next nudge goes straight out.
-    assertEquals(listOf("[agent] another one"), f.gate.injectNudge("complete", "[agent] another one").sent())
+    val ended = f.gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true)
+    assertTrue(ended.sent().isEmpty())
+    assertEquals(
+        listOf("✗ nudge: dropping speak — Sai already said it this turn"),
+        ended.logs(),
+    )
+  }
+
+  @Test
+  fun `a completion still flushes after Sai spoke, even if a queue-position is dropped`() {
+    val f = Fixture().ready().speaking()
+    f.gate.injectNudge("speak:queue-position", "queue-fallback-line")
+    f.gate.injectNudge("complete", "[agent] the downloads finished")
+    val ended = f.gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true)
+    assertTrue(ended.sent().single().contains("the downloads finished"))
+    assertFalse(ended.sent().single().contains("queue-fallback-line"))
+    assertTrue(ended.logs().any { it.contains("dropping speak:queue-position") })
+  }
+
+  @Test
+  fun `a completion arriving after generationComplete is held until the turn actually ends`() {
+    // The third barge-in in the same device call: generationComplete had cleared modelSpeaking, so
+    // the completion went out as `→ nudge: complete` while it was still reading the download result.
+    val f = Fixture().ready().speaking()
+    f.gate.onGenerationOrTurnEnd(generationEnded = true, turnEnded = false)
+    assertTrue("generationComplete must not open the floor", f.gate.isModelSpeaking)
+
+    val arriving = f.gate.injectNudge("complete", "[agent] the downloads finished")
+    assertTrue(arriving.sent().isEmpty())
+    assertEquals(listOf("→ nudge: complete — held until the turn ends"), arriving.logs())
+
+    val flushed = f.gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true)
+    assertTrue(flushed.sent().single().contains("the downloads finished"))
+  }
+
+  @Test
+  fun `a tool call cannot wedge the gate either`() {
+    // Same deadline, same reason: `endCall` is a tool call with no speech behind it, and a flag set
+    // here and never cleared would defer every later nudge for the rest of the call.
+    val f = Fixture().ready()
+    f.gate.onToolCall()
+
+    f.now += LiveTurnGate.AWAIT_MODEL_MS
+    assertEquals(listOf("later"), f.gate.injectNudge("later", "later").sent())
+  }
+
+  @Test
+  fun `the in-flight window expires, so a turn that produced nothing cannot wedge the gate`() {
+    // The counterpart to the recorded `modelSpeaking` bug: a hold that cannot expire is how every
+    // later nudge dies silently. This one is a deadline, so the worst case is one held nudge.
+    val f = Fixture().ready()
+    f.gate.injectNudge("greeting", "greeting")
+
+    f.now += LiveTurnGate.AWAIT_MODEL_MS
+    assertEquals(listOf("later"), f.gate.injectNudge("later", "later").sent())
+  }
+
+  @Test
+  fun `a frame from the model closes the window early`() {
+    // The window is a fallback for silence, not a fixed delay: once the model demonstrably answered,
+    // `modelSpeaking` is the accurate gate and the deadline must stop mattering.
+    val f = Fixture().ready()
+    f.gate.injectNudge("greeting", "greeting")
+    f.gate.onGenerationOrTurnEnd(generationEnded = true, turnEnded = true)
+
+    f.now += 10 // well inside AWAIT_MODEL_MS
+    assertEquals(listOf("next"), f.gate.injectNudge("next", "next").sent())
+  }
+
+  @Test
+  fun `the opening greeting is sent even if another turn is already in flight`() {
+    // Holding the greeting behind a turn that never ends is a connected call that never speaks.
+    val f = Fixture().ready()
+    f.gate.injectNudge("notice", "waking")
+    f.now += 200
+    assertEquals(listOf("greeting"), f.gate.injectNudge("greeting", "greeting").sent())
+  }
+
+  @Test
+  fun `the opening greeting is sent only once per session`() {
+    val f = Fixture().ready()
+    assertEquals(listOf("greeting"), f.gate.injectNudge("greeting", "greeting").sent())
+    val again = f.gate.injectNudge("greeting", "greeting again")
+    assertTrue(again.sent().isEmpty())
+    assertEquals(listOf("→ nudge: greeting — already sent this session"), again.logs())
+  }
+
+  @Test
+  fun `a greeting injected before setup survives a reconnect`() {
+    val f = Fixture()
+    f.gate.onConnect()
+    assertTrue(f.gate.injectNudge("greeting", "greeting").sent().isEmpty())
+    f.gate.onConnect()
+    val setup = f.gate.onSetupComplete()
+    assertTrue("the new session must still get the greeting", setup.sent().any { it.contains("greeting") })
   }
 
   // ── Nudge gating ─────────────────────────────────────────────────────────────────────────────────
@@ -131,11 +307,34 @@ class LiveTurnGateTest {
 
     val ended = f.gate.onGenerationOrTurnEnd(false, turnEnded = true)
 
-    assertEquals(listOf("first\n\nsecond"), ended.sent())
+    // Still ONE turn with both bodies in order — now behind the held-nudge preamble, which is what
+    // stops a result the model already delivered in the turn just ended being read out a second time.
+    val sent = ended.sent().single()
+    assertTrue(sent.startsWith("[system] What follows arrived while you were still speaking"))
+    assertTrue("the bodies keep their order, after the preamble", sent.endsWith("first\n\nsecond"))
     assertEquals(
         listOf("← nudge: delivering complete, notice (held during the turn)"),
         ended.logs(),
     )
+  }
+
+  @Test
+  fun `a nudge held behind a turn is warned that the turn may already have covered it`() {
+    // Live, 2026-08-19: a completion landed while Sai was answering "what's going on with all that?" —
+    // a turn in which it had already fetched and reported that same result through getSaiStatus. The
+    // completion flushed when the turn ended and was delivered anyway, so the user heard the same
+    // correction twice in consecutive breaths.
+    val held = Fixture().ready().speaking()
+    held.gate.injectNudge("complete", "[agent] the task finished")
+    val flushed = held.gate.onGenerationOrTurnEnd(false, turnEnded = true).sent().single()
+    assertTrue(flushed.contains("do NOT say it again"))
+
+    // …and NOT on the prompt path: a nudge delivered while the model is idle has no turn behind it to
+    // have repeated, and telling it "you may have already said this" there invites silence exactly
+    // where speech is correct.
+    val prompt = Fixture().ready()
+    val direct = prompt.gate.injectNudge("complete", "[agent] the task finished").sent().single()
+    assertEquals("[agent] the task finished", direct)
   }
 
   @Test
@@ -318,9 +517,13 @@ class LiveTurnGateTest {
 
     routing as TaskRouting.HeldForPhoto
     assertEquals("held-for-photo", routing.response.getString("result"))
-    // The wording is the whole point: a model told only "held" reports the task as running.
-    assertTrue(routing.response.getString("note").contains("NOT started yet"))
-    assertTrue(routing.response.getString("note").contains("Do not claim it is running"))
+    // The wording is the whole point: a model told only "held" reports the task as running,
+    // and a model handed "waiting for the glasses photo" spoke that as camera-wait narration.
+    val note = routing.response.getString("note")
+    assertEquals(CaptureNotes.HELD_FOR_PHOTO, note)
+    assertTrue(note.contains("NOT started yet"))
+    assertTrue(note.contains("Do not claim it is running"))
+    assertTrue("the wait itself must stay silent", note.contains("do not speak this note"))
     assertEquals("⏸ holding forwardToAgent (it asked for the photo) until the capture resolves", routing.log)
   }
 

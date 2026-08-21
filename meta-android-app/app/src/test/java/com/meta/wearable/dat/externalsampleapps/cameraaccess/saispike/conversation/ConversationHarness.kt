@@ -38,6 +38,8 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.NudgeActio
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.VoiceTransport
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.TaskRouting
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.agentEventToJson
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.userQuietMs
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.describePhoneClock
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ClientBrain
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.AgentEvent
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.Concierge
@@ -87,8 +89,18 @@ class ConversationHarness(
     private set
 
   private var lastUserSpeechAt = 0L
-  private var lastTaskForwardAt = 0L
+  /** Mirrors CallService's field of the same name — the quiet clock's stop point. See [userQuietMs]. */
+  private var workStartedAt = 0L
   private var lastStepFailureNudgeAt = 0L
+
+  /**
+   * Note that work the user is waiting on has begun, keeping the FIRST such moment since they spoke.
+   *
+   * Mirrors `CallService.markWorkStarted`, minus the capture site it has no camera for.
+   */
+  private fun markWorkStarted() {
+    if (workStartedAt < lastUserSpeechAt || workStartedAt == 0L) workStartedAt = clock.now
+  }
 
   /**
    * Swapped for a [LiveAgent] when the contract tier runs.
@@ -115,6 +127,8 @@ class ConversationHarness(
                 attachments: JSONArray?,
                 follow: Boolean,
             ) = (transport ?: agent).sendMessage(machineId, message, attachments, follow)
+
+            override fun abandonTurn() = (transport ?: agent).abandonTurn()
 
             override suspend fun post(path: String, body: JSONObject): JSONObject =
                 (transport ?: agent).post(path, body)
@@ -177,6 +191,9 @@ class ConversationHarness(
   /** The user says something. */
   suspend fun user(utterance: String) {
     lastUserSpeechAt = clock.now
+    // Speaking while we are already busy restarts the wait rather than a silence — they are plainly
+    // here, and plainly still waiting. Mirrors CallService's rule in `transcript`.
+    if (state.inFlight.isNotEmpty() || state.queue.isNotEmpty()) markWorkStarted()
     transcript += Line("you", utterance)
     presenter?.speak("you", utterance)
     gate.onUserTranscript(utterance)
@@ -260,6 +277,9 @@ class ConversationHarness(
 
   /** The tool-call half of GeminiLiveClient.handleToolCall, minus the socket. */
   private suspend fun routeCalls(calls: JSONArray) {
+    // Mirrors the real client: the gate is told a turn is in flight BEFORE any effect reaches the
+    // FSM, because the FSM answers some of them by speaking and a spoken line is a client turn.
+    gate.onToolCall()
     val effects = JSONArray()
     val hasCapture =
         (0 until calls.length()).any { calls.getJSONObject(it).optString("name") == "captureImage" }
@@ -269,6 +289,7 @@ class ConversationHarness(
       val effect = fcToEffect(c)
       when (name) {
         "getSaiStatus" -> log("→ tool: getSaiStatus → ${status()}")
+        "getLocalTime" -> log("→ tool: getLocalTime → ${describePhoneClock()}")
         "forwardToAgent",
         "enqueue",
         "relayToAgent" -> {
@@ -288,7 +309,7 @@ class ConversationHarness(
       }
     }
     if (effects.length() > 0) {
-      lastTaskForwardAt = clock.now
+      markWorkStarted()
       concierge.applyClientEffects(effects)
     }
   }
@@ -310,6 +331,14 @@ class ConversationHarness(
   // ── The client's own policy on agent events (mirrors CallService.onAgentEvent) ────────────────────
 
   private suspend fun onAgentEvent(e: AgentEvent) {
+    // Mirrors the gate in VoiceSession's reader, and covers all three sinks for the same reason it
+    // does: the tail of an aborted turn is not spoken, not written to the log `getSaiStatus` answers
+    // from, and not given to the FSM. Two of those three are nothing to do with the FSM, which is why
+    // suppressing its reaction alone left the result still being read out.
+    if (concierge.disownsAgentEvents()) {
+      log("dropped ${e::class.simpleName} from an aborted turn")
+      return
+    }
     concierge.handleAgentEvent(e)
 
     val json = agentEventToJson(e)
@@ -322,12 +351,9 @@ class ConversationHarness(
         AgentEventRouter.route(
             event = json,
             muted = muted,
-            userQuietMs =
-                when {
-                  lastUserSpeechAt == 0L -> Long.MAX_VALUE
-                  lastTaskForwardAt > lastUserSpeechAt -> lastTaskForwardAt - lastUserSpeechAt
-                  else -> clock.now - lastUserSpeechAt
-                },
+            // The shipped function, not a copy of it. This was an inlined `when` that had already
+            // drifted from the one CallService uses, which is the whole hazard a mirror carries.
+            userQuietMs = userQuietMs(clock.now, lastUserSpeechAt, workStartedAt),
             askFirstThresholdMs = DEFAULT_ASK_FIRST_MS,
             sinceLastStepFailureMs =
                 if (lastStepFailureNudgeAt == 0L) Long.MAX_VALUE
@@ -364,7 +390,6 @@ class ConversationHarness(
         is GateAction.UserTranscript -> {}
         is GateAction.TurnComplete -> {}
         is GateAction.FlushPlayback -> {}
-        is GateAction.ReleaseEffects -> concierge.applyClientEffects(action.effects)
       }
     }
   }

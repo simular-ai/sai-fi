@@ -12,6 +12,7 @@
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -45,6 +47,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
@@ -79,7 +82,7 @@ fun SettingsScreen(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
           GroupHeader("Account")
           // The email is its own line now. It used to live inside the button's label ("Sign out
-          // jamie@simular.ai", one ellipsized line) so the card kept the same height signed in and
+          // you@example.com", one ellipsized line) so the card kept the same height signed in and
           // signed out — a constraint the sign-in gate removed, since this screen only ever renders
           // signed in.
           Text(
@@ -165,6 +168,63 @@ fun SettingsScreen(
         }
       }
 
+      // ── Troubleshooting ─────────────────────────────────────────────────────────────────────
+      // In the app rather than in a doc because every one of these is discovered mid-call, wearing
+      // glasses, with the phone in a pocket — which is exactly when a README is unreachable. Each
+      // entry names the SYMPTOM first, because that is the only thing the user has.
+      item {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          GroupHeader("Troubleshooting")
+
+          Faq(
+              "Sai can't take photos, or says the camera was denied",
+              "Meta AI can grant the camera just once, and a pending glasses firmware update can " +
+                  "take it away until the update finishes — so a grant that worked yesterday may " +
+                  "not hold today. Open the Meta AI app, let any glasses update complete, then come " +
+                  "back to Home: \"Grant glasses camera\" reappears under Connection once this app " +
+                  "notices the permission is gone. If it is greyed out, the glasses aren't linked — " +
+                  "turn them on first, because Meta AI can't grant a permission for a device it " +
+                  "can't see.",
+          )
+          Faq(
+              "Sai never hears me, or I never hear Sai",
+              "Check the Audio line on Home for the route it picked. Glasses audio needs the " +
+                  "glasses connected before you start the call; otherwise it uses the phone. If " +
+                  "only one direction is broken it is almost always the route, not the call — end " +
+                  "it, reconnect the glasses, and start again.",
+          )
+          Faq(
+              "Sai talks over itself, or stops for no reason",
+              "Its own voice is reaching the microphone. Turn the volume down, and if a laptop or " +
+                  "speaker is playing the call aloud, point it away from you. On the phone route, " +
+                  "wired headphones rule it out entirely.",
+          )
+          Faq(
+              "Sai says my computer hasn't picked something up",
+              "The machine is asleep or offline. Sai wakes it when it can, and a cloud machine " +
+                  "takes about a minute — but a machine of your own that is switched off can't be " +
+                  "woken remotely at all. Check it in the Sai app.",
+          )
+          Faq(
+              "I asked for something and never heard back",
+              "If you were quiet for a while, Sai holds the result rather than interrupting — say " +
+                  "anything and it will offer it. \"Ask first after\" above is that delay; raise it " +
+                  "and Sai reports straight away instead.",
+          )
+          Faq(
+              "The call ended on its own",
+              "Five minutes of silence ends a call to save battery, and so does an hour of talking. " +
+                  "Sai says which before it hangs up. Tap to start again.",
+          )
+          Faq(
+              "Nothing works, and I want to report it",
+              "The two lines at the bottom of this screen are what a bug report needs: the build, " +
+                  "and the server it is talking to. Turn on Developer mode above and the Logs tab " +
+                  "keeps a transcript you can read back.",
+          )
+        }
+      }
+
       // ── What build is this ──────────────────────────────────────────────────────────────────
       // The two facts you need before reporting that something is broken. The backend URL was only
       // ever visible in the Logs tab header, which meant a release build never showed it at all.
@@ -182,7 +242,7 @@ fun SettingsScreen(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
           Text(
-              BuildConfig.CONCIERGE_URL,
+              BuildConfig.SAI_API_URL,
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               maxLines = 1,
@@ -228,6 +288,49 @@ fun SettingsScreen(
  * per-keystroke write means storage already agrees with the field, so a comparison can never tell
  * "typed something" from "just tapped in and out".
  */
+/**
+ * One symptom, and what to do about it. Collapsed by default.
+ *
+ * Collapsed because the list is read by someone hunting one symptom, and seven answers open at once is
+ * a wall to scroll past rather than a list to scan. The question stays a full-width click target so it
+ * is usable while walking.
+ */
+@Composable
+private fun Faq(question: String, answer: String) {
+  var open by remember { mutableStateOf(false) }
+  Column(
+      modifier =
+          Modifier.fillMaxWidth()
+              .clip(RoundedCornerShape(8.dp))
+              .clickable { open = !open }
+              .padding(vertical = 6.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+          question,
+          style = MaterialTheme.typography.bodyLarge,
+          modifier = Modifier.weight(1f).padding(end = 8.dp),
+      )
+      Text(
+          if (open) "−" else "+",
+          style = MaterialTheme.typography.bodyLarge,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+    if (open) {
+      Text(
+          answer,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
+}
+
 @Composable
 private fun AskFirstField(ui: VoiceConciergeActivity) {
   val focus = LocalFocusManager.current

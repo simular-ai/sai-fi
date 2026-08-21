@@ -403,6 +403,20 @@
         convo.appendChild(el)
         scroll()
       }
+      /**
+       * Empty the conversation, revoking each photo's object URL on the way out.
+       *
+       * `innerHTML = ''` drops the <img> elements but not the blobs behind them, so every capture
+       * survived for the tab's lifetime and a long demo — captures, plus a reconnect per `hello` —
+       * retained the lot. The phone-screen panel two blocks down has always got this right, for the
+       * reason written there; the photo path was simply left out of it.
+       */
+      function clearConversation() {
+        for (const img of convo.querySelectorAll('img')) {
+          if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src)
+        }
+        convo.innerHTML = ''
+      }
       // ── phone screen ───────────────────────────────────────────────
       // A live view, not an event: one <img> replaced in place, never appended to the conversation.
       // The object URL from the PREVIOUS frame must be revoked or the browser holds every JPEG it has
@@ -506,7 +520,13 @@
         syncAudioBtn()
       }
       audioBtn.addEventListener('click', async (e) => {
-        e.stopPropagation() // don't also run the click-anywhere fallback below
+        // stopPropagation does NOT keep the fallback below off this press: that one listens for
+        // `pointerdown`, which has already been and gone by the time a `click` exists. The fallback
+        // ignores events aimed at this button instead (see `unblock`), which is the half that
+        // actually works — without it, pressing "Enable audio" started the context on pointerdown
+        // and then took the mute branch on the click that followed, so the one control the room's
+        // audio depends on answered a press with "🔇 Audio muted".
+        e.stopPropagation()
         if (ctx?.state === 'running') {
           localMute = !localMute // once running, the button becomes the local mute
           syncAudioBtn()
@@ -514,7 +534,11 @@
         }
         await startAudio()
       })
-      const unblock = async () => {
+      const unblock = async (e) => {
+        // Anything aimed at the button belongs to the button's own handler, which is the one that
+        // knows the control has two meanings (enable, then mute). Letting both run made a single
+        // press do both.
+        if (e && e.target instanceof Node && audioBtn.contains(e.target)) return
         await startAudio()
         if (ctx?.state === 'running') {
           document.removeEventListener('pointerdown', unblock)
@@ -659,9 +683,14 @@
 
       // ── socket ─────────────────────────────────────────────────────
       function connect() {
+        // `get` hands back the DECODED value, so it has to be re-encoded on the way out — dropping it
+        // in raw sent a key containing `+`, `&` or `#` as something the server would read
+        // differently, and the dashboard 401'd on a key the user had typed correctly.
         const key = new URLSearchParams(location.search).get('k')
         const ws = new WebSocket(
-          `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/watch${key ? `?k=${key}` : ''}`,
+          `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/watch${
+            key ? `?k=${encodeURIComponent(key)}` : ''
+          }`,
         )
         ws.binaryType = 'arraybuffer'
         ws.onopen = () => ($('status').textContent = 'connected — waiting for phone')
@@ -688,7 +717,7 @@
             $('status').textContent = 'live'
             turns.clear()
             reportedPlaceholders.clear()
-            convo.innerHTML = ''
+            clearConversation()
             logs.innerHTML = ''
             resetScreen()
           } else if (m.t === 'turn') upsertTurn(m.id, m.role, m.text)

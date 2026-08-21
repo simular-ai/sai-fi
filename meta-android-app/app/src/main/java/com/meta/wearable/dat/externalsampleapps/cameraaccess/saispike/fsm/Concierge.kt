@@ -73,6 +73,17 @@ class Concierge(
 
   fun getState(): ConciergeState = state
 
+  /**
+   * True while anything arriving from the agent is the tail of a turn the user aborted.
+   *
+   * Read by the client's own event handling (`CallService.onAgentEvent` and the harness mirror), which
+   * is a SEPARATE path from this FSM: the nudge that makes Sai speak a result, and the ActivityLog
+   * entry that lets `getSaiStatus` report one, are both produced there and neither asks the FSM's
+   * permission. So suppressing the FSM's reaction alone does not stop a cancelled task's answer
+   * reaching the user — it stops the least of the three. See [ConciergeState.abortedTurn].
+   */
+  fun disownsAgentEvents(): Boolean = state.abortedTurn
+
   private val timers =
       object : IngestTimers {
         override fun scheduleApprovalTimeout(expiresAt: Long?) {
@@ -126,6 +137,26 @@ class Concierge(
           return@withLock acked
         }
 
+        // The tail of an ABORTED turn, and fully inert — no ingest, no reaction — for the same reason
+        // the mismatched approval above is: it is not ours to react to. The user said stop; the device
+        // stopped following the stream and the agent was ASKED to stop, over a round trip, and it does
+        // not stop mid-thought. Whatever still arrives is about work they cancelled.
+        //
+        // Inert rather than "ingested but not voiced", which was the first shape and leaks two ways.
+        // A stale `status: processing` would put the FSM back into WORKING with nothing in flight —
+        // and draining the queue needs IDLE, so the next task would never start. A stale
+        // ApprovalRequest would be recorded as pending and never voiced, parking the call on an
+        // approval nobody can answer. Both are the wedge that `endTurn`'s unconditional clear exists
+        // to prevent, arrived at from the other direction.
+        //
+        // The abort has already left the FSM idle and the turn closed, so there is nothing here that
+        // ingest still needs to do. See ConciergeState.abortedTurn for why the window ends at the next
+        // task and not sooner.
+        if (state.abortedTurn) {
+          log("ignored ${event::class.simpleName} from the aborted turn")
+          return@withLock emptyList()
+        }
+
         state = ingestAgentEvent(state, event, timers, log)
 
         // After ingest, so the prompt is populated; before the model reacts, because it is about to
@@ -171,6 +202,21 @@ class Concierge(
    */
   private suspend fun applyEffects(effects: List<Effect>) {
     for (effect in effects) applyEffect(effect)
+    // The reset confirmation belongs to the exchange that raised it, and nothing else was expiring
+    // it. `startTurn` clears it, but a held reset happens with nothing running — so on a call where
+    // the user answered "no, just drop that" the yes-flag survived, and the next stray "forget it",
+    // minutes and subjects later, wiped the conversation with no question asked. Any batch that is
+    // not another `resetSession` is the user having moved on; asking again is the safe direction.
+    if (state.resetConfirmAsked == true && effects.none { it is Effect.ResetSession }) {
+      state = state.copy(resetConfirmAsked = null)
+    }
+    // Every entry point reaches the queue through here, which is why the drain is here and not at
+    // the three call sites. It used to hang off `handleAgentEvent` alone, so an `enqueue` decided by
+    // the model while nothing was running — no turn in flight, therefore no agent event ever coming
+    // — appended to `state.queue` and stopped there, permanently, after the user had been told it
+    // was next. That is the invariant below stated as a bug: a path that leaves `mode` at IDLE and
+    // does not drain.
+    maybeDrainQueue()
     publishSessionState()
   }
 
@@ -191,7 +237,7 @@ class Concierge(
       is Effect.Deny -> applyApprovalDecision(c, effect)
       is Effect.ChooseOption -> applyChooseOption(c, effect)
       is Effect.Enqueue -> applyEnqueue(c, effect)
-      is Effect.Interrupt -> applyInterrupt(c)
+      is Effect.Interrupt -> applyInterrupt(c, effect)
       is Effect.CancelQueued -> applyCancelQueued(c, effect)
       is Effect.SendQueuedNow -> applySendQueuedNow(c, effect)
       is Effect.SetState -> state = state.withMode(effect.mode)
@@ -203,8 +249,8 @@ class Concierge(
   /**
    * Which events the brain is told about.
    *
-   * `progress` only when a step actually failed — otherwise she has no idea anything went wrong and
-   * fills the silence with a result she never received. Everything else here is either terminal or
+   * `progress` only when a step actually failed — otherwise Sai has no idea anything went wrong and
+   * fills the silence with a result it never received. Everything else here is either terminal or
    * something the user must hear about.
    */
   private fun wantsReaction(event: AgentEvent): Boolean =

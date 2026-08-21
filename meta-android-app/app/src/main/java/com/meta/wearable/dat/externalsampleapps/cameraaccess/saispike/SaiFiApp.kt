@@ -6,7 +6,7 @@
 //  • the DAT SDK, so `Wearables.*` is ready wherever it's first touched (registration in
 //    VoiceConciergeActivity, the gesture DeviceSession in CallService, the deep-link callback in
 //    MainActivity), and
-//  • Firebase, so Google Sign-In (SaiAuth) can mint the ID token the app sends to cloud-api.
+//  • Firebase, so Google Sign-In (SaiAuth) can mint the ID token the app sends to the Sai API.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 

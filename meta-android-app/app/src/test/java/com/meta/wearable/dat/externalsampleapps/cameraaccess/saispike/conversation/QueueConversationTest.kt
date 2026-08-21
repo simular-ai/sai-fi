@@ -253,17 +253,20 @@ class QueueConversationTest {
         h.advance(3_000)
 
         val told = h.heard()
-        assertTrue("the user should be told it is starting now: $told", told.contains("starting on that now"))
         assertFalse(
             "the stale line was spoken alongside the new one, in one breath: $told",
             told.contains("as soon as i'm done"))
         assertTrue("and the replacement should be visible in the log", h.logHas("replacing the stale one"))
+        // The model already said "sure" this turn. Flushing the FSM verbatim line would barge into
+        // that sentence (the device failure this gate now refuses). Dropping it is the point.
+        assertTrue(
+            "the replaced line must be dropped, not barged in: ${h.log.joinToString(" | ")}",
+            h.logHas("dropping speak:queue-position"))
       }
 
   @Test
-  fun `unrelated held lines still both get said`() = runBlocking {
-    // The guard on the fix: superseding is scoped to one subject. Two lines about different things
-    // must still accumulate, or the cure loses information the user needed.
+  fun `a completion held with a queue-position still goes out after Sai spoke`() = runBlocking {
+    // Completions are new information and must not be dropped just because a queue-position is.
     val h = harness()
     h.start()
     h.gate.onSaiTranscript("talking")
@@ -272,8 +275,10 @@ class QueueConversationTest {
     val flushed = h.gate.onGenerationOrTurnEnd(generationEnded = false, turnEnded = true)
 
     val sent = flushed.filterIsInstance<com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.GateAction.SendTurn>()
-    assertTrue("both should survive: ${sent.map { it.text }}", sent.single().text.contains("first"))
-    assertTrue("both should survive: ${sent.map { it.text }}", sent.single().text.contains("second"))
+    // Queue-position is a fallback for a silent turn; Sai already spoke, so it is dropped rather than
+    // barging into its sentence. Completions are new information and still go out.
+    assertTrue("the completion should survive: ${sent.map { it.text }}", sent.single().text.contains("second"))
+    assertFalse("queue-position must not ride along after it already spoke", sent.single().text.contains("first"))
   }
 
   @Test

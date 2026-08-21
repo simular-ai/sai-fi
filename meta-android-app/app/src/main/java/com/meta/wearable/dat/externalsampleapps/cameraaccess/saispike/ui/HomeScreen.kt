@@ -331,8 +331,8 @@ fun HomeScreen(
                 if (ui.machinesError != null) "Couldn't reach your machines. ${ui.machinesInfo}".trim()
                 else "Sai needs your machine list before it can start a call.",
                 detail =
-                    "The list comes from the Sai API, so this needs a working connection to it — on " +
-                        "staging that means the VPN. Nothing about the glasses matters yet.",
+                    "The list comes from the Sai API, so this needs a working connection to it. " +
+                        "Nothing about the glasses matters yet.",
             )
           } else if (ui.selectedMachine == null) {
             Hint("Pick a machine in Machine above before starting a call.")

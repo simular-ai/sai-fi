@@ -6,8 +6,8 @@
 // same real FSM, the same real bridge and gate, the same scripted agent — but the decisions come
 // from the model, running the prompt and tools the app actually ships.
 //
-// This is what cloud-api's eval cannot do. There, a `forwardToAgent` resolves to a canned `ok` and
-// the queue does not exist, so "is a waiting task described as waiting" is graded against a
+// This is what `TranscriptEvalTest` cannot do. There, a `forwardToAgent` resolves to a canned `ok`
+// and the queue does not exist, so "is a waiting task described as waiting" is graded against a
 // `session-state` the transcript author wrote by hand. Here the task really is waiting, because
 // something really is running, and the status the model reads comes from the real ActivityLog.
 //
@@ -17,10 +17,11 @@
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.eval
 
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.describePhoneClock
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.conversation.Brain
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.conversation.BrainTurn
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.ConciergeState
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.VoiceProfile
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.shippedProfile
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -64,7 +65,9 @@ class LiveBrain(
           calls.map { c ->
             val name = c.optString("name")
             val args = c.optJSONObject("args") ?: JSONObject()
-            if (name in LOCAL_TOOLS) {
+            if (name == "getLocalTime") {
+              name to JSONObject().put("time", describePhoneClock())
+            } else if (name in LOCAL_TOOLS) {
               name to resolveLocalTool(name, args)
             } else {
               // Handed to the harness, which routes it through the gate into the FSM. Answered `ok`
@@ -83,11 +86,7 @@ class LiveBrain(
 
   /** The prompt and tools the app ships, from its own asset. */
   private fun loadProfile(): Pair<String, JSONArray> {
-    val stream =
-        checkNotNull(javaClass.getResourceAsStream("/parity/prompt-and-tools.json")) {
-          "missing /parity/prompt-and-tools.json — the same artefact as app/src/main/assets/voice-profile.json"
-        }
-    val p = VoiceProfile.load(stream)
+    val p = shippedProfile()
     val tools = JSONArray()
     p.tools.forEach { t ->
       tools.put(
@@ -101,7 +100,7 @@ class LiveBrain(
 
   private companion object {
     /** Tools the DEVICE answers itself; no effect ever reaches the FSM for these. */
-    val LOCAL_TOOLS = setOf("getSaiStatus", "recallHistory", "switchMachine", "endCall")
+    val LOCAL_TOOLS = setOf("getSaiStatus", "getLocalTime", "recallHistory", "switchMachine", "endCall")
     const val MAX_TOOL_ROUNDS = 6
   }
 }

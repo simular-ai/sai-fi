@@ -9,8 +9,8 @@
 //
 //   - a nudge held for a turn that never ended (a barge-in, then a token-expiry reconnect) died
 //     without a trace, which is one candidate cause for a completion the user never heard;
-//   - a turn that produced a generation and no turn-end frame left `modelSpeaking` stuck true and
-//     EVERY later nudge deferred behind it, silently, for the rest of the call.
+//   - flushing a held nudge on `generationComplete` (not `turnComplete`) barged Sai off its own
+//     sentence: the function-call generation ends before it speaks, and a client turn is interrupt.
 //
 // Both are barge-in ⇄ queue interactions, and neither had a test until this class existed. Same
 // precedent as AgentEventRouter: a pure decision, so it can be tested without a device.
@@ -50,9 +50,6 @@ sealed interface GateAction {
 
   /** The user barged in — flush queued playback immediately. */
   data object FlushPlayback : GateAction
-
-  /** Release these held task effects to the concierge. */
-  data class ReleaseEffects(val effects: JSONArray) : GateAction
 }
 
 /** What [LiveTurnGate.routeTaskCall] decided about a task-starting tool call. */
@@ -72,6 +69,21 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
   // Nudge gating: server-pushed nudges make the model talk; firing one mid-utterance cuts it off, so
   // defer until the turn ends (or drop it, for a low-value nudge the caller marks dropIfBusy).
   @Volatile private var modelSpeaking = false
+  /**
+   * A client turn has been sent and the model has not answered it yet.
+   *
+   * [modelSpeaking] only goes true once the model's FIRST frame arrives, which leaves a few hundred ms
+   * in which a turn is genuinely in flight and the gate believes nothing is happening. A second nudge
+   * injected into that window cuts off the turn the first one started. Device 2026-08-20: the wake
+   * announcement fired ~200 ms after the greeting on a hibernated machine and produced `— barge-in —`
+   * before Sai had made a sound, on every call.
+   *
+   * Held as a DEADLINE rather than a flag on purpose. The recorded failure in this file's header is a
+   * `modelSpeaking` that stuck true and silently deferred every later nudge for the rest of the call;
+   * a timestamp cannot stick, so the worst case here is a nudge held for [AWAIT_MODEL_MS] and then
+   * sent, rather than one held forever.
+   */
+  @Volatile private var awaitingModelUntil = 0L
   // A glasses capture is running. Task-starting effects are held for its duration — not just within
   // the batch that triggered it, since the model can now speak first and forward a beat later.
   @Volatile private var captureInFlight = false
@@ -116,16 +128,14 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
   // setupComplete has landed on the CURRENT socket, so a client turn is deliverable. Cleared on
   // connect and close: a nudge injected between them would be sent ahead of the setup frame.
   @Volatile private var ready = false
+  /** The opening greeting already went out on THIS socket. Cleared on connect so a reconnect can retry. */
+  @Volatile private var greetingSentThisSession = false
 
   // ── Queries ──────────────────────────────────────────────────────────────────────────────────────
 
   /** Mid-utterance: a nudge sent now would cut the model off. */
   val isModelSpeaking: Boolean
     get() = modelSpeaking
-
-  /** setupComplete has landed, so a client turn is deliverable. */
-  val isReady: Boolean
-    get() = ready
 
   /** A capture is running, so a task that asked for the photo must wait for it. */
   val isCaptureInFlight: Boolean
@@ -152,7 +162,9 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
    */
   fun onConnect(): List<GateAction> {
     modelSpeaking = false
+    awaitingModelUntil = 0L
     ready = false
+    greetingSentThisSession = false
     discardAudioUntil = 0L
     saiTurn = ""
     withheld = ""
@@ -161,12 +173,22 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
       // Say what is being thrown away. A nudge held for a turn that never ended (a barge-in, then a
       // token-expiry reconnect) died here without a trace, which is one candidate cause for a
       // completion the user never heard.
-      if (deferredNudges.isNotEmpty()) {
+      //
+      // The greeting is not dropped: it is the turn that starts the call, and a reconnect before Sai
+      // has spoken is exactly when it has to go out again. preConnectNudges already survive; move a
+      // held greeting there so setupComplete delivers it instead of leaving the new session silent.
+      val greeting = deferredNudges.filter { it.first == "greeting" }
+      val others = deferredNudges.filter { it.first != "greeting" }
+      deferredNudges.clear()
+      if (others.isNotEmpty()) {
         actions +=
             GateAction.Log(
-                "✗ nudge: dropping ${deferredNudges.joinToString(", ") { it.first }} — session replaced")
+                "✗ nudge: dropping ${others.joinToString(", ") { it.first }} — session replaced")
       }
-      deferredNudges.clear()
+      if (greeting.isNotEmpty()) {
+        synchronized(preConnectNudges) { preConnectNudges.addAll(greeting) }
+        actions += GateAction.Log("→ nudge: greeting — carried to the new session")
+      }
     }
     // preConnectNudges deliberately SURVIVES a reconnect: it holds session-level state (mute) that a
     // fresh Live session needs re-asserted anyway, and the reconnect is exactly when it's re-injected.
@@ -209,6 +231,7 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
    */
   fun onInterrupted(): List<GateAction> {
     modelSpeaking = false
+    awaitingModelUntil = 0L
     discardAudioUntil = now() + INTERRUPT_DISCARD_MS
     return listOf(GateAction.FlushPlayback)
   }
@@ -235,6 +258,7 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
     val out = withheld + delta
     withheld = ""
     modelSpeaking = true
+    awaitingModelUntil = 0L
     spokeThisTurn = true
     return listOf(GateAction.SaiTranscript(out))
   }
@@ -242,25 +266,64 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
   /** An audio part was accepted for playback (not discarded) — the model is mid-turn. */
   fun onAudioAccepted() {
     modelSpeaking = true
+    awaitingModelUntil = 0L // it answered; `modelSpeaking` is the accurate gate from here
+  }
+
+  /**
+   * A tool call arrived — which is PROOF the model is mid-turn, and the gate had no other way to know.
+   *
+   * This is the hole every `— barge-in —` in the 2026-08-20 device log came through. A `toolCall`
+   * frame is emitted DURING a generation and normally arrives BEFORE the model's first audio or
+   * transcript, so at that instant `modelSpeaking` is still false; and the turn was started by the
+   * user speaking, not by a client turn, so `awaitingModelUntil` was never armed either. The FSM then
+   * reacts to that very tool call — synchronously, by design — and its spoken line goes out as a
+   * client turn straight into the gap. Every "on it, I'll get to the other thing after" the user heard
+   * was cut off by the queue-position line that was meant to follow it.
+   *
+   * It also covers the model RESUMING after the tool response, which is the same window a second time:
+   * the response goes out microseconds from here, and the deadline is generous enough to span both.
+   *
+   * A deadline rather than `modelSpeaking = true`, for the reason in [awaitingModelUntil]'s KDoc: a
+   * tool call is not a promise of speech (an `endCall` may be the end of the conversation), and a flag
+   * set here and never cleared would defer every later nudge for the rest of the call — the exact
+   * failure recorded in this file's header.
+   */
+  fun onToolCall() {
+    awaitingModelUntil = now() + AWAIT_MODEL_MS
   }
 
   /**
    * A generation or a turn ended.
    *
-   * `generationComplete` also ends the model's output — it just doesn't end the TURN. Both are flush
-   * points for nudge gating, and taking either one closes a hole: a held nudge was only ever released
-   * on `turnComplete`, so a turn that produced a generation and no turn-end frame left `modelSpeaking`
-   * stuck true and EVERY later nudge deferred behind it, silently, for the rest of the call. A
-   * completion the user never hears is exactly that shape. Safe to flush here: nothing further is
-   * being generated, and audio already queued still plays in order.
+   * Only [turnEnded] is a flush point. `generationComplete` is not: Gemini Live treats a client turn
+   * as barge-in, and a generation ending is often the function-call generation, which completes
+   * BEFORE the model speaks the ack. Flushing then cuts that ack off. Device 2026-08-20, three
+   * times in one call:
+   *
+   *   speak:queue-position held → generationComplete → "Sure, I'll start…" cut off → same line again;
+   *   speak (cancel) held → "No problem, that one hadn't started yet" cut off → same line again;
+   *   complete sent because generationComplete had already cleared [modelSpeaking] while it was
+   *   still reading the download result.
+   *
+   * The comment that used to live here ("audio already queued still plays in order") is false on
+   * this API. Completions wait for `turnComplete` (or interrupt / reconnect). A late result is
+   * better than Sai interrupting itself.
    */
   fun onGenerationOrTurnEnd(generationEnded: Boolean, turnEnded: Boolean): List<GateAction> {
     val actions = mutableListOf<GateAction>()
-    if (generationEnded || turnEnded) {
+    if (turnEnded) {
+      // Snapshot BEFORE clearing: a verbatim `speak` / `speak:*` held for this turn is a fallback
+      // for silence. If Sai already produced audio or a transcript, flushing that line as a client
+      // turn barges it off its own sentence and it says the same thing twice.
+      val alreadySpoke = spokeThisTurn || modelSpeaking
       modelSpeaking = false
-      actions += flushNudges() // deliver anything held back during the turn
-      // Only a real turn boundary ends the transcript entry; a generation boundary mid-turn does not.
-      if (turnEnded) actions += GateAction.TurnComplete
+      awaitingModelUntil = 0L
+      actions += flushNudges(alreadySpoke)
+      actions += GateAction.TurnComplete
+    } else if (generationEnded) {
+      // Deliberately a no-op on the gate. Do not clear [modelSpeaking] or [awaitingModelUntil]:
+      // generationComplete after a tool call is exactly when that window has to cover speech that
+      // has not started yet. Clearing it is how a held nudge walked into its next sentence.
     }
     // A turn that heard the user and said nothing is worth a line: an ignored side conversation used
     // to look exactly like a swallowed utterance or a wedged session.
@@ -304,7 +367,16 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
    * content) and this log is mirrored to a projector.
    */
   fun injectNudge(kind: String, turns: String, dropIfBusy: Boolean = false): List<GateAction> {
-    if (modelSpeaking) {
+    // `awaitingModelUntil` covers the window a turn is in flight but has produced nothing yet — see
+    // its KDoc. Without it two nudges sent a few hundred ms apart are not gated against each other at
+    // all, and the second interrupts the first.
+    //
+    // The OPENING GREETING is the exception. It is the turn that starts the call; holding it behind
+    // another in-flight turn (or behind a turn that never ends) is how a call connects and then sits
+    // silent. Device 2026-08-20: no `→ nudge: greeting` SendTurn, then no hello either — Gemini Live
+    // stays quiet until it gets a client turn. Wake/notices wait; the greeting does not.
+    val isGreeting = kind == "greeting"
+    if (!isGreeting && (modelSpeaking || now() < awaitingModelUntil)) {
       if (dropIfBusy) {
         return listOf(GateAction.Log("→ nudge: $kind — dropped (mid-utterance)"))
       }
@@ -338,9 +410,16 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
       synchronized(preConnectNudges) { preConnectNudges.add(kind to turns) }
       return listOf(GateAction.Log("→ nudge: $kind — held until the session is ready"))
     }
+    if (isGreeting && greetingSentThisSession) {
+      return listOf(GateAction.Log("→ nudge: greeting — already sent this session"))
+    }
     // These are the nudges that ask for silence; a quiet turn after one of them is obedience, and
     // must not be reported as Sai judging the speech wasn't for it.
     if (kind.startsWith("muted") || kind.startsWith("complete (ask-first")) silenceWasRequested = true
+    // Armed as the turn goes out, so the next nudge is gated against it even though the model has not
+    // said anything yet.
+    if (isGreeting) greetingSentThisSession = true
+    awaitingModelUntil = now() + AWAIT_MODEL_MS
     return listOf(GateAction.Log("→ nudge: $kind"), GateAction.SendTurn(turns))
   }
 
@@ -366,26 +445,82 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
           preConnectNudges.clear()
           kinds to joined
         }
+    if (pending.first.split(", ").any { it.trim() == "greeting" }) greetingSentThisSession = true
     return listOf(
         GateAction.Log("← nudge: delivering ${pending.first} (held until the session was ready)"),
         GateAction.SendTurn(pending.second),
     )
   }
 
-  private fun flushNudges(): List<GateAction> {
+  /** FSM `say` lines: a fallback if the model stayed quiet. Not new information. */
+  private fun isVerbatimSpeak(kind: String) = kind == "speak" || kind.startsWith("speak:")
+
+  private fun flushNudges(alreadySpoke: Boolean = false): List<GateAction> {
+    val droppedKinds = mutableListOf<String>()
     val pending =
         synchronized(deferredNudges) {
-          if (deferredNudges.isEmpty()) return emptyList()
+          if (alreadySpoke) {
+            // Every LiveVoiceChannel.say is kind `speak` or `speak:…`. Those lines exist so a silent
+            // turn still acknowledges the queue/cancel; if it already said it, sending them is the
+            // self-interrupt in the device log. Completions / instructs stay — they are new facts.
+            val drop = deferredNudges.filter { isVerbatimSpeak(it.first) }
+            if (drop.isNotEmpty()) {
+              droppedKinds += drop.map { it.first }
+              deferredNudges.removeAll { isVerbatimSpeak(it.first) }
+            }
+          }
+          if (deferredNudges.isEmpty()) return@synchronized null
           val kinds = deferredNudges.joinToString(", ") { it.first }
           val joined = deferredNudges.joinToString("\n\n") { it.second }
           deferredNudges.clear()
           kinds to joined
         }
-    return listOf(
-        GateAction.Log("← nudge: delivering ${pending.first} (held during the turn)"),
-        GateAction.SendTurn(pending.second),
-    )
+    val actions = mutableListOf<GateAction>()
+    if (droppedKinds.isNotEmpty()) {
+      actions +=
+          GateAction.Log(
+              "✗ nudge: dropping ${droppedKinds.joinToString(", ")} — Sai already said it this turn")
+    }
+    if (pending == null) return actions
+    // Same window as a direct inject: a flush IS a client turn, and the nudge that arrives right after
+    // one must not cut off the turn the flush just started.
+    awaitingModelUntil = now() + AWAIT_MODEL_MS
+    actions += GateAction.Log("← nudge: delivering ${pending.first} (held during the turn)")
+    actions += GateAction.SendTurn(HELD_PREAMBLE + "\n\n" + pending.second)
+    return actions
   }
+
+  /**
+   * Prepended to anything delivered by [flushNudges], and only to that.
+   *
+   * A nudge held during a turn describes something that happened WHILE the model was talking — and the
+   * turn it waited behind may already have covered it. Live on 2026-08-19: a completion landed while
+   * Sai was answering "what's going on with all that?", a turn in which it had already fetched and
+   * reported that very result via getSaiStatus. The completion flushed afterwards and was dutifully
+   * delivered again, so the user heard the same correction twice in consecutive breaths.
+   *
+   * Deliberately NOT solved by collapsing same-kind completions the way tagged nudges collapse: two
+   * completions in one turn are usually two different tasks, and dropping the older one would lose a
+   * result outright — the opposite failure, and a worse one. The model is the only thing that knows
+   * whether it already said this, so it is the thing that gets asked.
+   *
+   * Scoped to the flush path on purpose: a completion delivered promptly has nothing behind it to
+   * repeat, and telling the model "you may have already said this" there would invite silence exactly
+   * when speech is correct.
+   *
+   * The address clause is the 2026-08-20 device failure: a held instruct flushed after a barge-in
+   * that was the user talking to someone else, so Sai jumped back in ("Dropped that task… anything
+   * else?") over a side conversation. Being interrupted is not permission to speak the held nudge
+   * unless they were talking to you.
+   */
+  private val HELD_PREAMBLE =
+      "[system] What follows arrived while you were still speaking, so it waited for you to finish. " +
+          "You may already have covered some or all of it in that turn — if so, do NOT say it again: " +
+          "repeating a result the user just heard is worse than saying nothing, and saying nothing is " +
+          "the right output for a nudge you have already acted on. Speak only what is genuinely new. " +
+          "If the speech that cut you off was not clearly to you — they were talking to someone else, " +
+          "even about the work — stay silent on this too: do not resume, do not re-ask, and do not " +
+          "speak a result they did not ask you for. They will speak to you when they want it."
 
   // ── Captures, and the tasks that wait on them ────────────────────────────────────────────────────
 
@@ -446,12 +581,7 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
           response =
               JSONObject()
                   .put("result", "held-for-photo")
-                  .put(
-                      "note",
-                      "NOT started yet — waiting for the glasses photo so the task has it. It will " +
-                          "start by itself the moment the photo lands, or be cancelled if the " +
-                          "capture fails. Do not claim it is running.",
-                  ),
+                  .put("note", CaptureNotes.HELD_FOR_PHOTO),
           log = "⏸ holding $name (it asked for the photo) until the capture resolves",
       )
     }
@@ -470,5 +600,14 @@ class LiveTurnGate(private val now: () -> Long = { System.currentTimeMillis() })
     // were already in flight; comfortably shorter than the pause before the model's next reply
     // (end-of-speech + silenceDurationMs).
     const val INTERRUPT_DISCARD_MS = 700L
+    /**
+     * How long a sent client turn is treated as in flight before the gate stops waiting for a reply.
+     *
+     * Covers the round trip to a first frame with room to spare; past it the gate assumes the turn
+     * produced nothing and lets the next nudge through, rather than holding it indefinitely on a
+     * promise the model never kept. Deliberately generous against the ~200 ms that caused the device
+     * failure and deliberately finite, for the reason in [awaitingModelUntil]'s KDoc.
+     */
+    const val AWAIT_MODEL_MS = 3_000L
   }
 }

@@ -35,10 +35,13 @@ import android.net.Network
 import android.os.IBinder
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
+import com.meta.wearable.dat.core.session.DeviceSession
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.BuildConfig
 import androidx.core.app.ServiceCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -106,6 +109,25 @@ class CallService : Service() {
    * are the only reason this is volatile at all.
    */
   @Volatile private var saiMuted = false
+
+  /**
+   * The bind-time wake has been asked for this call. One-shot, and deliberately NOT the greeting gate:
+   * `greetOnFirstReady` returns early when muted, and a muted call still needs its machine woken —
+   * mute suppresses the announcement, not the wake.
+   */
+  @Volatile private var wakeRequested = false
+
+  /** The in-flight "is it awake yet" watcher, if any. A machine switch supersedes the previous one. */
+  private var wakeWatch: Job? = null
+
+  /**
+   * The user has been asked once about work they are leaving behind — see [LeavingWorkPolicy].
+   *
+   * Shared by the hang-up and the machine switch on purpose: they are the same question about the same
+   * work, and asking it twice in a row ("shall I stop that first?" … "shall I stop that first?") is
+   * the trap the one-shot exists to avoid. Reset per call, like [hangupGuardUsed].
+   */
+  @Volatile private var leavingWorkAsked = false
   // Nudges withheld while muted (they'd be spoken into the void and lost). Replayed on unmute.
   private val heldNudges = HeldNudgeQueue(MAX_HELD_NUDGES)
   // Keepalive throttle: the last time we told the server a human is still present (see maybeKeepalive).
@@ -118,13 +140,15 @@ class CallService : Service() {
    */
   @Volatile private var lastUserSpeechAt = 0L
   /**
-   * When a task was last handed to the agent (elapsedRealtime), 0 if none this call.
+   * When we last STARTED something the user is waiting on (elapsedRealtime), 0 if nothing yet.
    *
-   * Only here to be SUBTRACTED from the quiet clock. While a task runs the user has no reason to
-   * speak, so counting that stretch as absence made every task longer than the ask-first threshold
-   * report itself as "the user has gone away" — see the gate in onAgentEvent.
+   * Only here to be SUBTRACTED from the quiet clock — see [userQuietMs], which explains why the
+   * FIRST such moment after the user speaks is the one that matters and the latest is not. Stamped
+   * through [markWorkStarted] alone, which is what keeps "work" meaning the same thing at all three
+   * of its sites: a task going to the agent, a glasses capture starting, and the user speaking while
+   * either is already in progress.
    */
-  @Volatile private var lastTaskForwardAt = 0L
+  @Volatile private var workStartedAt = 0L
   /**
    * The last thing each side actually said, and when Sai last said anything — the evidence an
    * `endCall` needs to be judged by.
@@ -155,10 +179,14 @@ class CallService : Service() {
   @Volatile private var audioPaused = false
   @Volatile private var ending = false
   @Volatile private var liveReconnecting = false
-  // Proactive opening greeting fires ONCE per call, on the first Live setup-complete. Re-armed in
-  // startCall. Mid-call reconnects (token expiry / network) and resume-after-pause both re-run
-  // setup-complete, so gating on this latch — not on the event itself — keeps us from re-greeting.
+  // Proactive opening greeting. Re-armed in startCall. A reconnect before Sai has actually spoken
+  // re-injects it — the first SendTurn can die with the socket, and consuming a one-shot latch there
+  // is how a call connected and then sat silent. Once we have heard Sai (or skipped because muted),
+  // later readies must not re-greet.
   private val greetingGate = GreetingGate()
+  @Volatile private var saiHasSpoken = false
+  /** Muted at first ready — do not greet later if they unmute / reconnect. */
+  @Volatile private var greetingSkippedMuted = false
 
   private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
   private var netRegistered = false
@@ -218,16 +246,22 @@ class CallService : Service() {
     heldNudges.clear()
     lastKeepaliveMs = 0L
     lastUserSpeechAt = 0L
-    lastTaskForwardAt = 0L
+    workStartedAt = 0L
     lastSaiSpeechAt = 0L
     lastUserText = ""
     lastSaiText = ""
     hangupGuardUsed = false
+    leavingWorkAsked = false
     lastStepFailureNudgeAt = 0L
     callActive = true
     audioPaused = false
     ending = false
     greetingGate.reset()
+    saiHasSpoken = false
+    greetingSkippedMuted = false
+    wakeRequested = false
+    wakeWatch?.cancel()
+    wakeWatch = null
     activityLog.reset()
 
     ServiceCompat.startForeground(
@@ -314,6 +348,7 @@ class CallService : Service() {
               // purpose — suppressing at the decode site would skip `modelSpeaking`, and the nudge
               // gating would then think the turn was idle while audio was still arriving.
               if (saiMuted) return@GeminiLiveClient
+              saiHasSpoken = true
               observer.onSai(it) // so the room hears Sai, not just the wearer
               io.play(it)
             },
@@ -332,6 +367,7 @@ class CallService : Service() {
               // …and if the goodbye already finished playing there is nothing to barge in on, so fresh
               // speech in the window counts too.
               if (role == "you") cancelHangupIfPending("you kept talking")
+              if (role == "sai") saiHasSpoken = true
               transcript(role, delta)
             },
             onTurnComplete = { endTurn() },
@@ -351,7 +387,17 @@ class CallService : Service() {
             // signal, and it is the only one that distinguishes a live call from an open mic.
             onUsage = { p, r, _ -> concierge?.onUsage(p, r) },
             onLog = { log(it) },
-            onReady = { greetOnFirstReady() },
+            onReady = {
+              greetOnFirstReady()
+              // AFTER the greeting, so the opening turn is the first thing heard rather than a status
+              // line, and only once per call. Waiting for the Live session rather than firing at
+              // startCall costs a second or two against a ~60s spin-up and buys both the ordering and
+              // not waking a machine for a call that never connected.
+              if (!wakeRequested) {
+                wakeRequested = true
+                wakeMachine(currentMachineId)
+              }
+            },
             onClosed = { if (callActive && !audioPaused && !ending) scheduleLiveReconnect() },
         )
     live = client
@@ -365,6 +411,11 @@ class CallService : Service() {
       try {
         val boot = bootstrap()
         log("session: model=${boot.model} tools=${boot.toolCount} (profile ships with the app)")
+        if (BuildConfig.SAI_API_URL.isBlank()) {
+          log("start failed: no sai_api_url — set it in local.properties and rebuild")
+          stopAll()
+          return@launch
+        }
         if (BuildConfig.GEMINI_API_KEY.isEmpty()) {
           // Nothing to connect with. Said plainly rather than failing as an opaque 1007 close.
           log("start failed: no gemini_api_key — set it in local.properties and rebuild")
@@ -392,29 +443,37 @@ class CallService : Service() {
   }
 
   /**
-   * First Live setup-complete of this call → open with a proactive greeting so the user doesn't have
-   * to speak first. Gated to fire ONCE per call via [greetingGate]: onReady fires on every connect
-   * (initial, mid-call reconnect, resume-after-pause), so only the first ready greets. The greeting is
-   * model OUTPUT (a client turn, not mic input), so it plays even in push-to-talk mode where the mic
-   * window is closed at connect. Gemini Live stays silent until it gets some input, so injecting this
-   * nudge — the same mechanism used for capture-retry / completion nudges — is what kicks off the
-   * opening turn; barge-in is unaffected (the user can talk over it as with any model turn).
+   * Live setup-complete → open with a proactive greeting so the user doesn't have to speak first.
+   *
+   * Gemini Live stays silent until it gets some input, so this client turn is what kicks off the
+   * opening generation. onReady fires on every connect (initial, mid-call reconnect, resume-after-pause).
+   * Re-inject if this call has not actually heard Sai yet: the first SendTurn can die with the socket,
+   * and a one-shot latch consumed there is a connected call that never greets. Once Sai has spoken (or
+   * we skipped because muted), later readies must not re-greet.
    */
   private fun greetOnFirstReady() {
     // Mute no longer needs re-asserting here: the client holds it as session state and asserts it at
     // every setupComplete, BEFORE this runs. Doing it from this method is what caused the bug below —
     // the greeting went out straight after and countermanded it.
-    if (!greetingGate.shouldGreet()) return
     // Muted, there is no greeting to give. GREETING_NUDGE says "greet the user first, don't wait for
     // them to speak" — the exact opposite of the MUTED_NUDGE sent a line earlier, and the model obeys
     // whichever it read last, which is why a call muted before it connected still opened with "Hello!
     // I'm here and ready to help". Consume the gate anyway: a greeting delivered whenever Sai happens
     // to be unmuted, minutes into a call, is worse than no greeting at all.
     if (saiMuted) {
+      greetingSkippedMuted = true
+      greetingGate.shouldGreet()
       log("→ nudge: greeting — skipped (muted at connect)")
       return
     }
-    live?.injectNudge("greeting", GREETING_NUDGE)
+    if (greetingSkippedMuted || saiHasSpoken) return
+    val client =
+        live
+            ?: run {
+              log("→ nudge: greeting — skipped (no live session)")
+              return
+            }
+    client.injectNudge("greeting", GREETING_NUDGE)
   }
 
   /**
@@ -532,6 +591,11 @@ class CallService : Service() {
       if (captureInFlight) return
       captureInFlight = true
     }
+    // A capture IS the user waiting on us, and on the glasses it is the slowest thing we do. Stamped
+    // here rather than left to the forward that follows: a task about the photo is held on the device
+    // until the photo lands, so the forward can be tens of seconds after the request, and the gate
+    // that reads this clock concluded the user had wandered off while the camera was still spinning up.
+    markWorkStarted()
     // Show that something is happening. A capture takes seconds — longer when the cold camera needs a
     // second attempt — and until now the phone showed nothing at all until the photo landed, so
     // pressing the button looked like it had done nothing.
@@ -540,84 +604,103 @@ class CallService : Service() {
     // back, so without this the user asks a question and hears nothing while the camera spins up.
     // Only on a fresh capture — a coalesced caller must not re-blip.
     audioIo?.playCaptureCue()
-    scope.launch {
-      val result =
-          try {
-            when (val cap =
-                GlassesCamera.capture(
-                    session,
-                    onLog = { log(it) },
-                    // Task C (follow-up): a stream-level recapture (attempt 2) adds a noticeable wait,
-                    // so ANNOUNCE it — a brief spoken line is the primary signal, with the cue as a
-                    // guaranteed fallback.
-                    //
-                    // Safe to speak here: the captureImage tool call was already answered
-                    // "capture-started" the instant it arrived (GeminiLiveClient answers it inline
-                    // precisely so the model can talk during the capture), so NO function call is
-                    // pending at this point — a client turn can't strand a tool response or scramble
-                    // turn order. injectNudge(dropIfBusy = true) is the model's own guarded path: it
-                    // sends a user turn only when the model is idle and DROPS (never queues) if it's
-                    // mid-sentence, so it can't cut off the "let me take a look" filler. The cue covers
-                    // exactly that drop case (and plays instantly regardless).
-                    onRetry = {
-                      audioIo?.playCaptureCue()
-                      live?.injectNudge(
-                          "capture-retry",
-                          "[system] The photo didn't come through — briefly tell the user you're " +
-                              "trying again, in one short sentence.",
-                          dropIfBusy = true,
-                      )
-                    },
-                )) {
-              // Relay the SPECIFIC failure reason (not a generic "no photo") so the concierge can tell
-              // the user the truth — camera not permitted / glasses not ready / stream slow / etc. The
-              // technical detail rides along in a clearly-marked suffix so the model can explain WHY if
-              // the user asks; the full detail is also logged regardless (for the Copy button).
-              is GlassesCamera.Result.Failure -> {
-                log("camera FAILED — ${cap.message} | detail: ${cap.detail}")
-                false to "${cap.message}  (technical detail: ${cap.detail})"
-              }
-              is GlassesCamera.Result.Success -> {
-                val photo = cap.photo
-                // Show the audience what Sai was asked to look at. Published BEFORE the upload so the
-                // dashboard shows it immediately rather than after a round-trip — and so a failed
-                // upload still leaves the picture on screen.
-                observer.onPhoto(photo.jpeg)
-                // Show it on the phone too. Until now a capture was invisible here — the picture
-                // lived only on the dashboard and inside the next task.
-                CallController.update {
-                  it.copy(
-                      capture =
-                          CallController.Capture(
-                              jpeg = photo.jpeg,
-                              takenAt = System.currentTimeMillis(),
-                              // Already spoken for if a task was held for it — the send follows within
-                              // moments, and "Not sent" would be wrong for that whole window.
-                              sent =
-                                  if (photoDestined) CallController.Sent.SENDING
-                                  else CallController.Sent.HELD,
-                          ))
-                }
-                val token = SaiAuth.idToken() ?: p.token // fresh ID token — upload can outlive p.token
-                val attachment =
-                    ConciergeClient.uploadAttachment(p.baseUrl, token, photo.jpeg, "glasses.jpg")
-                        .put("width", photo.width)
-                        .put("height", photo.height)
-                // Held HERE, not stashed server-side. The server drains its stash on the next write()
-                // — and write() backs BOTH forwardTask and steer — so stashing at capture time meant
-                // the photo rode whatever the user said next, attached or not. It now waits until the
-                // model explicitly asks for it (attachLatestImage), which is also what makes the
-                // phone's Sent/Not-sent label exact rather than inferred.
-                latestAttachment = attachment
-                attachmentSent = false // a fresh photo has not been anywhere yet
-                log("📷 captured + uploaded ${photo.jpeg.size / 1024}KB — held, not sent")
-                true to "captured"
-              }
+    captureJob = scope.launch { runCapture(session, p) }
+  }
+
+  /**
+   * The capture itself — and the guarantee that every waiter is answered, including when the user
+   * says "stop" and this coroutine is cancelled underneath it.
+   *
+   * That guarantee is why the fulfilment sits in a `finally` rather than after the work. The model's
+   * captureImage tool call is DEFERRED until the photo lands, so a waiter that is never called leaves
+   * the Live session waiting forever on a response it was promised: cancelling a capture would have
+   * hung the very conversation the cancellation was meant to free up.
+   */
+  private suspend fun runCapture(session: DeviceSession, p: CallController.StartParams) {
+    var result = false to "I stopped taking the photo."
+    try {
+      result =
+          when (val cap =
+              GlassesCamera.capture(
+                  session,
+                  onLog = { log(it) },
+                  // Task C (follow-up): a stream-level recapture (attempt 2) adds a noticeable wait,
+                  // so ANNOUNCE it — a brief spoken line is the primary signal, with the cue as a
+                  // guaranteed fallback.
+                  //
+                  // Safe to speak here: the captureImage tool call was already answered
+                  // "capture-started" the instant it arrived (GeminiLiveClient answers it inline
+                  // precisely so the model can talk during the capture), so NO function call is
+                  // pending at this point — a client turn can't strand a tool response or scramble
+                  // turn order. injectNudge(dropIfBusy = true) is the model's own guarded path: it
+                  // sends a user turn only when the model is idle and DROPS (never queues) if it's
+                  // mid-sentence, so it can't cut off the "let me take a look" filler. The cue
+                  // covers exactly that drop case (and plays instantly regardless).
+                  onRetry = {
+                    audioIo?.playCaptureCue()
+                    live?.injectNudge(
+                        "capture-retry",
+                        "[system] The photo didn't come through — briefly tell the user you're " +
+                            "trying again, in one short sentence.",
+                        dropIfBusy = true,
+                    )
+                  },
+              )) {
+            // Relay the SPECIFIC failure reason (not a generic "no photo") so the concierge can tell
+            // the user the truth — camera not permitted / glasses not ready / stream slow / etc. The
+            // technical detail rides along in a clearly-marked suffix so the model can explain WHY if
+            // the user asks; the full detail is also logged regardless (for the Copy button).
+            is GlassesCamera.Result.Failure -> {
+              log("camera FAILED — ${cap.message} | detail: ${cap.detail}")
+              false to "${cap.message}  (technical detail: ${cap.detail})"
             }
-          } catch (e: Exception) {
-            log("capture/upload failed: ${e.message}")
-            false to "I couldn't attach the photo."
+            is GlassesCamera.Result.Success -> {
+              val photo = cap.photo
+              // Show the audience what Sai was asked to look at. Published BEFORE the upload so the
+              // dashboard shows it immediately rather than after a round-trip — and so a failed
+              // upload still leaves the picture on screen.
+              observer.onPhoto(photo.jpeg)
+              // Show it on the phone too. Until now a capture was invisible here — the picture
+              // lived only on the dashboard and inside the next task.
+              CallController.update {
+                it.copy(
+                    capture =
+                        CallController.Capture(
+                            jpeg = photo.jpeg,
+                            takenAt = System.currentTimeMillis(),
+                            // Already spoken for if a task was held for it — the send follows within
+                            // moments, and "Not sent" would be wrong for that whole window.
+                            sent =
+                                if (photoDestined) CallController.Sent.SENDING
+                                else CallController.Sent.HELD,
+                        ))
+              }
+              val token = SaiAuth.idToken() ?: p.token // fresh ID token — upload can outlive p.token
+              val attachment =
+                  ConciergeClient.uploadAttachment(p.baseUrl, token, photo.jpeg, "glasses.jpg")
+                      .put("width", photo.width)
+                      .put("height", photo.height)
+              // Held HERE, not stashed server-side. The server drains its stash on the next write()
+              // — and write() backs BOTH forwardTask and steer — so stashing at capture time meant
+              // the photo rode whatever the user said next, attached or not. It now waits until the
+              // model explicitly asks for it (attachLatestImage), which is also what makes the
+              // phone's Sent/Not-sent label exact rather than inferred.
+              latestAttachment = attachment
+              attachmentSent = false // a fresh photo has not been anywhere yet
+              log("📷 captured + uploaded ${photo.jpeg.size / 1024}KB — held, not sent")
+              true to "captured"
+            }
           }
+    } catch (e: CancellationException) {
+      // Listed BEFORE the catch-all, which would otherwise swallow it and report a failed capture
+      // instead of an honoured stop. `result` keeps the cancelled wording the waiters are answered
+      // with; rethrowing is what leaves this job actually cancelled rather than quietly finished.
+      log("📷 capture cancelled")
+      throw e
+    } catch (e: Exception) {
+      log("capture/upload failed: ${e.message}")
+      result = false to "I couldn't attach the photo."
+    } finally {
       // Fulfill every queued caller (each model tool-call id + the temple/UI nudge) with the one
       // result, then reset — a capture that arrives after this starts a fresh stream, as it should.
       CallController.update { it.copy(capturing = false) }
@@ -680,6 +763,9 @@ class CallService : Service() {
     hangupAt = 0L
     hangupJob?.cancel()
     hangupJob = null
+    // Nothing to narrate to: the watcher's only output is speech on a call that no longer exists.
+    wakeWatch?.cancel()
+    wakeWatch = null
     // Drop the clipboard with the call. Held metadata outlives the WS otherwise, and the next call
     // would open with a photo from the last one silently eligible to attach — a stale picture riding
     // an unrelated request is the exact bug the hold-until-asked design exists to prevent.
@@ -723,6 +809,17 @@ class CallService : Service() {
             "last sai: \"${excerpt(lastSaiText)}\"" +
             (if (spokeThisTurn) " | Sai spoke in this turn" else " | Sai said nothing in this turn"),
     )
+    // Work first, farewell second. HangupPolicy answers "did they mean me?"; this answers "do they
+    // know what they are leaving?" — and an unanswered task outlives the call either way, so the
+    // question has to come before the goodbye rather than after it.
+    val leaving = leavingWork(Leaving.CALL)
+    if (leaving is LeavingWorkAction.Ask) {
+      leavingWorkAsked = true
+      log("⏻ endCall held — work outstanding; asking before leaving it behind")
+      live?.injectNudge("endcall-work-outstanding", leaving.nudge)
+      status("live — talk (a hang-up was held back)")
+      return
+    }
     when (val action =
         HangupPolicy.decide(
             spokeThisTurn = spokeThisTurn,
@@ -820,7 +917,7 @@ class CallService : Service() {
     }
     notifyReason(reason)
     scope.launch {
-      if (canSpeak) delay(1_800) // let the spoken reason land before cutting audio
+      if (canSpeak) awaitSignOff()
       stopAll()
       status(reason) // stopAll resets status to "Idle" — keep the reason visible on the ended call
     }
@@ -830,12 +927,12 @@ class CallService : Service() {
 
   /**
    * Bring up the presenter feed (DEBUG only). Off unless a URL resolves: an explicit `presenter_url`,
-   * else derived from a LAN/dev `concierge_url` host — the demo laptop runs both, so pointing the app
+   * else derived from a LAN/dev `sai_api_url` host — the demo laptop runs both, so pointing the app
    * at it is enough. Failures here are logged and ignored; the call proceeds regardless.
    */
   private fun startPresenter() {
     if (!BuildConfig.DEBUG) return
-    val url = PresenterSocket.resolveUrl(BuildConfig.PRESENTER_URL, BuildConfig.CONCIERGE_URL)
+    val url = PresenterSocket.resolveUrl(BuildConfig.PRESENTER_URL, BuildConfig.SAI_API_URL)
     if (url.isBlank()) return
     log("presenter: connecting to $url")
     val presenter =
@@ -905,17 +1002,7 @@ class CallService : Service() {
                   AgentEventRouter.route(
                       event = json,
                       muted = saiMuted,
-                      // Quiet measured up to the moment the task went out, never past it. A user
-                      // who asked for something and is waiting for it is silent for exactly as long
-                      // as the task takes, and reading that as absence is what silenced a finished
-                      // answer they were sitting there waiting to hear.
-                      userQuietMs =
-                          when {
-                            lastUserSpeechAt == 0L -> Long.MAX_VALUE
-                            lastTaskForwardAt > lastUserSpeechAt ->
-                                lastTaskForwardAt - lastUserSpeechAt
-                            else -> now - lastUserSpeechAt
-                          },
+                      userQuietMs = userQuietMs(now, lastUserSpeechAt, workStartedAt),
                       askFirstThresholdMs = params?.askFirstThresholdMs ?: DEFAULT_ASK_FIRST_MS,
                       sinceLastStepFailureMs =
                           if (lastStepFailureNudgeAt == 0L) Long.MAX_VALUE
@@ -937,6 +1024,10 @@ class CallService : Service() {
             // let the model speak the reason before we tear the call down.
             onPermanentFailure = { code -> endCallWithReason(code, speak = true) },
             onCostGuard = { reason -> endCallByGuard(reason) },
+            // The device's own half of "stop". An abort used to reach the agent and nothing else, so
+            // a "wait, stop" said during a capture left the glasses working through their retries and
+            // a photo arriving for a task that no longer existed.
+            abortLocalWork = { cancelCapture() },
             onConnectionChange = { ok ->
               // Only while the call is up: a stream closing as part of teardown isn't a fault, and
               // flagging it would leave the chip stuck on "reconnecting" after the call ends.
@@ -961,7 +1052,7 @@ class CallService : Service() {
           CostGuardReason.MAX_DURATION ->
               "We've been on a while, so I'll wrap up here — call me back anytime."
           CostGuardReason.IDLE ->
-              "It's been quiet for a bit, so I'll hang up to save battery. Tap to start again."
+              "It's been quiet for a bit, so I'll hang up to save battery. Start again from your phone."
         }
     status("ending…")
     // Muted, "speaking" the reason reaches nobody — fall through to the notification instead, and skip
@@ -974,7 +1065,7 @@ class CallService : Service() {
       )
     }
     scope.launch {
-      if (canSpeak) delay(1_800) // let the spoken sign-off land before cutting audio
+      if (canSpeak) awaitSignOff() // the line runs past any fixed delay worth picking
       stopAll()
       status(line) // keep the reason visible after the call ends
     }
@@ -989,6 +1080,16 @@ class CallService : Service() {
   private fun switchMachine(name: String): String {
     val decision = MachineSwitcher.resolve(name, machines, currentMachineId)
     if (decision is MachineSwitch.SwitchTo) {
+      // Asked BEFORE the switch, because the switch is what destroys the answer: applyMachineSwitch
+      // builds a fresh VoiceSession, so the queue, the in-flight turn and any pending approval go with
+      // the old one. Returned as the TOOL REPLY rather than spoken, so the model asks in its own words
+      // and the switch simply has not happened yet.
+      val leaving = leavingWork(Leaving.MACHINE)
+      if (leaving is LeavingWorkAction.Ask) {
+        leavingWorkAsked = true
+        log("↺ switchMachine held — work outstanding; asking before leaving it behind")
+        return leaving.nudge
+      }
       applyMachineSwitch(decision.machine, notifyModel = false) // the reply carries the context update
     }
     return when (decision) {
@@ -1007,7 +1108,16 @@ class CallService : Service() {
       return
     }
     if (match.machineId == currentMachineId) return
+    // A button press is not a question, so this does not hold — the user did the thing deliberately and
+    // a modal-by-voice over a tap would be worse than the loss. But it must not be SILENT: the same
+    // work is being left behind, so say what it was.
+    val leftBehind = leavingWork(Leaving.MACHINE)
     applyMachineSwitch(match, notifyModel = true)
+    if (leftBehind is LeavingWorkAction.Ask) {
+      leavingWorkAsked = true
+      log("↺ picker switch left work behind — telling the user rather than asking")
+      live?.injectNudge("left-work-behind", leftBehind.nudge)
+    }
   }
 
   /**
@@ -1029,26 +1139,207 @@ class CallService : Service() {
       if (notifyModel) {
         live?.injectNudge("machine-switch", MachineSwitcher.contextNudge(match.label))
       }
+      // Both switch paths land here — the voice tool and the picker — so the wake is wired once. It
+      // follows the context nudge for the same reason the bind-time one follows the greeting: the
+      // switch is what the user asked about, and the machine's state is the footnote.
+      wakeMachine(match.machineId)
+    }
+  }
+
+  /**
+   * Bring [machineId] up if it is asleep, and say so if it is.
+   *
+   * Decided behaviour: **announce at the switch, and wake then.** Not lazily on the first task — that
+   * is what this exists to fix. Until this path existed, the wake news could only ride a turn stream
+   * (`data-status` → `AgentEvent.Notice`), which is the response body of `POST /message`, so the first
+   * task of a call absorbed the whole ~1min spin-up in silence and then produced a result. Waking here
+   * moves the spin-up under the conversation instead.
+   *
+   * Three rules worth not undoing:
+   *
+   * 1. **Branch on `startingUp`, not `waking`.** A machine already mid-wake answers `waking = false` —
+   *    correctly, nothing was dispatched — and the user is still owed the minute. `startingUp` is also
+   *    false for a hibernated machine that cannot be woken, which is the case where saying the line
+   *    would be a lie: `MACHINE_WAKING` promises about a minute, and that machine is not coming back.
+   * 2. **The wake happens even while muted; only the announcement is suppressed.** These three lines
+   *    are true for about a minute and then describe a world that has moved on, so they are dropped
+   *    rather than held — the same call `AgentEventRouter` makes for a `notice`. Replayed on unmute
+   *    they would announce a wake that finished minutes ago.
+   * 3. **All three lines share one nudge kind**, so a later one REPLACES an earlier one still held for
+   *    the end of a turn. Without that the model is handed "it's waking up" and "it's awake now" in one
+   *    batch and reads out both — the contradiction `VoiceChannel.say`'s `supersedes` exists to stop.
+   *
+   * `waking = true` only means the wake was DISPATCHED: `ensureVmAwake` fires at vm-service
+   * fire-and-forget and never polls, so the timeout below is this client's own and
+   * [MACHINE_WAKE_FAILED] is the honest end of it.
+   */
+  private fun wakeMachine(machineId: String) {
+    val p = params ?: return
+    // A switch retires the previous machine's watcher: whether the one we just left ever came up is no
+    // longer anything to tell the user about.
+    wakeWatch?.cancel()
+    wakeWatch =
+        scope.launch {
+          val token = SaiAuth.idToken() ?: p.token
+          val outcome =
+              try {
+                ConciergeClient.wakeMachine(p.baseUrl, token, machineId)
+              } catch (e: Exception) {
+                // Best-effort by design. A machine that cannot be woken is not a reason to fail a
+                // call — the first task will wake it the old way, a minute late.
+                log("wake: could not reach the wake endpoint — ${e.message}")
+                return@launch
+              }
+
+          val opening =
+              WakePolicy.onWakeRequested(
+                  startingUp = outcome.startingUp,
+                  muted = saiMuted,
+                  audible = live != null,
+                  status = outcome.status,
+                  canWake = outcome.canWake,
+                  dispatched = outcome.waking,
+              )
+          say(opening)
+
+          // Gated on the MACHINE, not on whether we spoke. Silence because nothing is coming up is the
+          // end of it; silence because we were muted is not — the wake is real and still in flight, and
+          // the mute may be over by the time it lands. `onWatchEnded` re-reads `saiMuted` at that
+          // moment, so unmuting mid-wake still hears "the computer's awake now", which is fresh news
+          // rather than the stale replay the drop-while-muted rule exists to avoid.
+          if (!outcome.startingUp) return@launch
+
+          val deadline = SystemClock.elapsedRealtime() + WAKE_WATCH_MS
+          while (SystemClock.elapsedRealtime() < deadline) {
+            delay(WAKE_POLL_MS)
+            // Both matter: the call may have ended, and the user may have switched away from the
+            // machine we are watching, which makes its readiness someone else's news.
+            if (!callActive || machineId != currentMachineId) return@launch
+            val awake =
+                try {
+                  ConciergeClient.listMachines(p.baseUrl, SaiAuth.idToken() ?: p.token)
+                      .firstOrNull { it.machineId == machineId }
+                      ?.isActive == true
+                } catch (e: Exception) {
+                  log("wake: status poll failed — ${e.message}")
+                  false // keep waiting; a blip is not a failed wake
+                }
+            if (awake) {
+              log("wake: machine is active")
+              say(WakePolicy.onWatchEnded(active = true, muted = saiMuted, audible = live != null))
+              return@launch
+            }
+          }
+          log("wake: gave up after ${WAKE_WATCH_MS / 1000}s — never reached active")
+          say(WakePolicy.onWatchEnded(active = false, muted = saiMuted, audible = live != null))
+        }
+  }
+
+  /**
+   * Is there outstanding work, and has the user been told? See [LeavingWorkPolicy].
+   *
+   * Reads the FSM rather than tracking a parallel copy: the queue and the in-flight turn already live
+   * there, and a second count is a second thing to get wrong.
+   */
+  private fun leavingWork(leaving: Leaving): LeavingWorkAction {
+    val state = concierge?.state() ?: return LeavingWorkAction.Proceed
+    return LeavingWorkPolicy.decide(
+        state = state,
+        leaving = leaving,
+        alreadyAsked = leavingWorkAsked,
+        muted = saiMuted,
+    )
+  }
+
+  /**
+   * Wait for a spoken sign-off to actually finish before tearing the audio down.
+   *
+   * Replaces a flat 1.8 s, which was shorter than the lines it was waiting for — the idle-timeout
+   * reason runs about four seconds and was cut mid-sentence on device. Waits for the line to START
+   * (the model has to generate it first), then for the play queue to drain, then a short tail for what
+   * the AudioTrack still holds.
+   *
+   * Every wait is bounded. A teardown that hangs because a sign-off never came is worse than one that
+   * clips a word: the mic stays open and the guard that fired has not actually ended anything.
+   */
+  private suspend fun awaitSignOff() {
+    val io = audioIo ?: return
+    // 1. Wait for it to begin. If nothing is ever queued the model produced no audio at all — muted,
+    // dropped socket, a refusal — and there is nothing to wait out.
+    val startBy = SystemClock.elapsedRealtime() + SIGNOFF_START_MS
+    while (!io.playbackPending && SystemClock.elapsedRealtime() < startBy) delay(50)
+    if (!io.playbackPending) {
+      log("sign-off: nothing was spoken — ending now")
+      return
+    }
+    // 2. Wait for it to finish, capped. `playbackPending` goes false between chunks as well as at the
+    // end, so require it to stay quiet for a beat rather than trusting one observation.
+    val endBy = SystemClock.elapsedRealtime() + SIGNOFF_MAX_MS
+    var quietSince = 0L
+    while (SystemClock.elapsedRealtime() < endBy) {
+      delay(50)
+      if (io.playbackPending) {
+        quietSince = 0L
+        continue
+      }
+      if (quietSince == 0L) quietSince = SystemClock.elapsedRealtime()
+      if (SystemClock.elapsedRealtime() - quietSince >= SIGNOFF_QUIET_MS) break
+    }
+    if (SystemClock.elapsedRealtime() >= endBy) log("sign-off: capped at ${SIGNOFF_MAX_MS / 1000}s")
+    // 3. The track's own buffer, which `playbackPending` cannot see.
+    delay(SIGNOFF_TAIL_MS)
+  }
+
+  /**
+   * Act on a [WakePolicy] decision: speak the line verbatim, or log why not.
+   *
+   * The shared `speak:machine-state` kind is what makes a later line REPLACE an earlier one still held
+   * for the end of a turn; see rule 3 on [wakeMachine]. Same wrapper as `LiveVoiceChannel.say`, because
+   * these are `say` constants — and a paraphrase of "about a minute" is how a waking VM once sounded
+   * like a running task.
+   */
+  private fun say(decision: WakeAnnouncement) {
+    when (decision) {
+      is WakeAnnouncement.Silent -> log("wake: not spoken — ${decision.why}")
+      is WakeAnnouncement.Speak ->
+          live?.injectNudge(
+              "speak:machine-state",
+              "[system] Say to the user, briefly and verbatim: \"${decision.line}\"")
     }
   }
 
   // ── Reconnect (Live session token expiry ~30 min, or a network blip) ────────────────────────────
 
+  /**
+   * Is a reconnect still the right thing to be doing? The same three conditions that gate starting
+   * one, so the loop cannot outlive the reason it was started.
+   */
+  private fun reconnectStillWanted() = callActive && !ending && !audioPaused
+
   private fun scheduleLiveReconnect() {
-    if (!callActive || liveReconnecting || ending || audioPaused) return
+    if (!reconnectStillWanted() || liveReconnecting) return
     liveReconnecting = true
     CallController.update { it.copy(reconnecting = true) }
     status("reconnecting…")
     log("live: session dropped — reconnecting…")
     scope.launch {
       var backoff = ReconnectPolicy.INITIAL_BACKOFF_MS
-      while (callActive) {
+      while (reconnectStillWanted()) {
         delay(backoff)
-        if (!callActive) break
+        // Re-checked AFTER the wait, and against all three conditions rather than `callActive`
+        // alone. A pause or a teardown during the backoff is the ordinary case and neither clears
+        // `callActive` — both do drop the Live client, so `live?.connect` was a null-safe no-op that
+        // could not throw, and the loop went on to clear `reconnecting`, announce "live — talk" and
+        // log "live: reconnected" over a call whose mic and session were down. The header then read
+        // "live — talk" beside the PAUSED chip until the user resumed.
+        if (!reconnectStillWanted()) break
         try {
           params ?: break
+          // Taken as a value, so a client that went away mid-flight is a break rather than a silent
+          // no-op that reports success.
+          val client = live ?: break
           endTurn()
-          live?.connect(bootstrap(), BuildConfig.GEMINI_API_KEY)
+          client.connect(bootstrap(), BuildConfig.GEMINI_API_KEY)
           CallController.update { it.copy(reconnecting = false) }
           status("live — talk")
           log("live: reconnected")
@@ -1104,6 +1395,31 @@ class CallService : Service() {
   // one capture in flight, every caller's response fulfilled from its single result.
   @Volatile private var captureInFlight = false
   private val pendingCaptureResponds = mutableListOf<(Boolean, String) -> Unit>()
+
+  /**
+   * The running capture, held so that "stop" can actually stop it.
+   *
+   * Not a duplicate of [captureInFlight]: that flag is the coalescing gate (is there a capture to
+   * join?) and this is the handle (what do I cancel?).
+   */
+  @Volatile private var captureJob: Job? = null
+
+  /**
+   * Abandon a capture in progress — the local half of an abort.
+   *
+   * Cancellation is honoured between capturePhoto attempts rather than inside one, so the shutter may
+   * still fire once. The stream teardown runs regardless (it is NonCancellable in GlassesCamera),
+   * because a half-released camera slot wedges every later capture in the call, and the waiters are
+   * answered from the `finally` in [runCapture] so the model is never left holding an unanswered tool
+   * call.
+   */
+  private fun cancelCapture() {
+    val job = captureJob ?: return
+    if (!job.isActive) return
+    log("📷 cancelling the capture in progress")
+    job.cancel()
+    captureJob = null
+  }
 
   private fun manualCapture() {
     // Not while paused (live == null: the nudge would be lost and the photo would silently ride a
@@ -1165,9 +1481,21 @@ class CallService : Service() {
     // reason, so the pair is emitted atomically once the fix is in hand.
     scope.launch {
       val fix = PhoneLocation.current(applicationContext, ::log)
-      if (hasMessageEffect(effects)) lastTaskForwardAt = SystemClock.elapsedRealtime()
       sendEffectsNow(effects, wantsPhoto, fix)
     }
+  }
+
+  /**
+   * Note that work the user is waiting on has begun — the quiet clock's stop point.
+   *
+   * Deliberately keeps the FIRST stamp since they last spoke rather than the latest: a "what am I
+   * looking at?" starts a capture immediately and forwards the task only once the photo lands, and
+   * it is the camera spinning up that ends their silence, not the forward tens of seconds later. See
+   * [userQuietMs].
+   */
+  private fun markWorkStarted() {
+    val now = SystemClock.elapsedRealtime()
+    if (workStartedAt < lastUserSpeechAt || workStartedAt == 0L) workStartedAt = now
   }
 
   /** Does this batch actually hand something to the agent? (vs. speech-only effects.) */
@@ -1196,6 +1524,13 @@ class CallService : Service() {
       wantsPhoto: Boolean,
       fix: PhoneLocation.Result?,
   ) {
+    // Stamped HERE, at the one point every path to the agent funnels through, and not at a call
+    // site. It used to live on the location branch only — so the ordinary forward, which is the
+    // common one by far, never stamped at all and the gate this field exists for did nothing: a 40s
+    // task read as 40s of user absence, and the finished answer the user was sitting there waiting
+    // for was withheld with the ask-first wording. One assignment behind two callers is how that
+    // came back; there is now no path to the agent that does not pass through this line.
+    if (hasMessageEffect(effects)) markWorkStarted()
     when (fix) {
       is PhoneLocation.Result.Success -> {
         concierge?.bridge?.setPendingLocation(fix.place.toTaskLocation())
@@ -1303,6 +1638,14 @@ class CallService : Service() {
     if (entry.kind == CallController.Kind.YOU) {
       lastUserSpeechAt = SystemClock.elapsedRealtime()
       lastUserText = entry.text
+      // Speaking while we are already busy restarts the wait rather than a silence: they are plainly
+      // here, and plainly still waiting for whatever is running. Without this, "how's it going?" put
+      // to a long task reset nothing — the quiet clock ran on from their question and the result that
+      // arrived a minute later was withheld from the very person who had just asked about it.
+      val busy = concierge?.state()
+      if (captureInFlight || busy?.inFlight?.isNotEmpty() == true || busy?.queue?.isNotEmpty() == true) {
+        markWorkStarted()
+      }
     } else {
       lastSaiSpeechAt = SystemClock.elapsedRealtime()
       lastSaiText = entry.text
@@ -1326,11 +1669,13 @@ class CallService : Service() {
    */
   private fun markTurnCutOff() {
     val entry = CallController.markLiveTurnCutOff() ?: return
-    observer.onTurn(
-        entry.id,
-        if (entry.kind == CallController.Kind.YOU) "you" else "sai",
-        entry.text,
-    )
+    val isSai = entry.kind != CallController.Kind.YOU
+    // The same gate `transcript()` applies, and for the same reason: muted, what Sai produced stays
+    // in the phone's log and off the projector. This path published unconditionally, and by
+    // construction it only ever marks a SAI entry — so every barge-in during a muted call pushed the
+    // one kind of turn the mute is meant to keep off the dashboard.
+    if (isSai && saiMuted) return
+    observer.onTurn(entry.id, if (isSai) "sai" else "you", entry.text)
   }
 
   private fun endTurn() = CallController.endTurn()
@@ -1376,6 +1721,24 @@ class CallService : Service() {
      * as "they're still talking" would make ending a call by voice impossible.
      */
     private const val HANGUP_STRAGGLER_GUARD_MS = 600L
+    /**
+     * How long to keep watching for a woken machine to come up.
+     *
+     * `MACHINE_WAKING` promises "about a minute", so this is generous against that rather than tight:
+     * the failure it reports is real and unrecoverable, and calling one early on a machine that was
+     * merely slow would be the worse error.
+     */
+    private const val WAKE_WATCH_MS = 3 * 60_000L
+    /** Poll interval while waiting for a wake. Cheap (`GET /machines`), and nothing pushes this. */
+    private const val WAKE_POLL_MS = 10_000L
+    /** How long to wait for a sign-off to start before concluding none is coming. */
+    private const val SIGNOFF_START_MS = 2_500L
+    /** Hard cap on waiting for a sign-off to finish. The mic is still open until it expires. */
+    private const val SIGNOFF_MAX_MS = 12_000L
+    /** How long the play queue must stay empty to count as finished rather than between chunks. */
+    private const val SIGNOFF_QUIET_MS = 350L
+    /** For what the AudioTrack still holds after the queue drains. */
+    private const val SIGNOFF_TAIL_MS = 400L
     private const val NOTIF_ID = 42
     private const val REASON_NOTIF_ID = 43
     /** Default "ask before delivering an update" threshold; overridable via StartParams (app setting). */

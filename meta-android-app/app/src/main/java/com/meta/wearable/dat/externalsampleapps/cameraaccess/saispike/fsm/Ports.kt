@@ -34,8 +34,8 @@ sealed interface AgentEvent {
    * Mid-turn narration / tool progress. Deliberately NOT surfaced to the user.
    *
    * `failed` marks a STEP that failed while the task carries on — not an `error`, which is terminal,
-   * but the one kind of progress the concierge must hear about: without it she has no idea anything
-   * went wrong and fills the silence with a result she never received.
+   * but the one kind of progress the concierge must hear about: without it Sai has no idea anything
+   * went wrong and fills the silence with a result it never received.
    */
   data class Progress(val text: String, val tool: String? = null, val failed: Boolean = false) :
       AgentEvent

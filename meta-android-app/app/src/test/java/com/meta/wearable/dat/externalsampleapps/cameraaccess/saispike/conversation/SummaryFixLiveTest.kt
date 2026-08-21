@@ -1,4 +1,4 @@
-/* sai-fi — voice concierge. TEMPORARY live verification of the finish-summary fix. */
+/* sai-fi — voice concierge. Live-agent check: a text-delta finish is actually reported. */
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.conversation
 
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.conversation.ScriptedBrain.Companion.whenNudged

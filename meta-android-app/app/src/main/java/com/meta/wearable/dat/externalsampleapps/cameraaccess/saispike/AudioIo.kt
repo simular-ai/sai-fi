@@ -254,33 +254,25 @@ class AudioIo(
    */
   fun playCaptureCue() {
     if (track == null) return
-    playQueue.offer(CAPTURE_CUE)
-  }
-
-  /** Two short rising sine blips with fades, as 24 kHz PCM16 — built once. */
-  private val CAPTURE_CUE: ByteArray by lazy {
-    val toneMs = 70
-    val gapMs = 45
-    val samples = OUT_RATE * toneMs / 1000
-    val gap = OUT_RATE * gapMs / 1000
-    val out = java.io.ByteArrayOutputStream()
-    fun tone(freq: Double) {
-      for (i in 0 until samples) {
-        // Fade in/out so the blip doesn't click at the edges.
-        val fade = minOf(1.0, minOf(i, samples - i) / (OUT_RATE * 0.008))
-        val v = Math.sin(2.0 * Math.PI * freq * i / OUT_RATE) * 0.22 * fade
-        val s = (v * Short.MAX_VALUE).toInt().coerceIn(-32768, 32767)
-        out.write(s and 0xFF)
-        out.write((s shr 8) and 0xFF)
-      }
-    }
-    tone(880.0)
-    repeat(gap * 2) { out.write(0) }
-    tone(1174.7)
-    out.toByteArray()
+    playQueue.offer(CaptureCue.pcm)
   }
 
   /** Barge-in: drop everything queued for playback so the model goes quiet immediately. */
+  /**
+   * Is there model audio still waiting to be written to the track?
+   *
+   * For the teardown paths, which have to let a spoken sign-off finish before cutting the audio. They
+   * used to wait a flat 1.8 s, which is less than the lines they were waiting for: the idle-timeout
+   * reason ("It's been quiet for a bit, so I'll hang up to save battery. Start again from your phone.") ran
+   * past it and was cut mid-sentence on device.
+   *
+   * Only the QUEUE — what the track itself still holds is a fraction of a second and is covered by the
+   * caller's tail wait. Exact accounting there would mean polling `getPlaybackHeadPosition` against a
+   * moving write cursor, which is a lot of arithmetic to shave 200 ms off a hang-up.
+   */
+  val playbackPending: Boolean
+    get() = playQueue.isNotEmpty()
+
   fun flushPlayback() {
     playQueue.clear() // drop everything not yet written, not just what the track already holds
     track?.let {
@@ -300,15 +292,21 @@ class AudioIo(
     worker?.join(500)
     worker = null
     playQueue.clear()
-    player?.join(500)
+    // Unblock the playback thread BEFORE waiting on it. It can be parked inside a blocking write for
+    // the length of the track buffer (~0.5s) — a stalled SCO link at teardown is the realistic case —
+    // and pausing plus flushing is what makes that write return, so the join below almost always
+    // finds a thread that has already left the native call.
+    track?.let { runCatching { it.pause(); it.flush() } }
+    val playbackFinished = player?.let { it.join(500); !it.isAlive } ?: true
     player = null
     rec?.release()
-    track?.let {
-      runCatching {
-        it.pause()
-        it.flush()
-        it.release()
-      }
+    // …and if it somehow did not, do NOT release underneath it: releasing frees the native track the
+    // thread is still writing to. The runCatching around that write swallows the IllegalStateException,
+    // so the use-after-free was silent — a leaked track on a teardown path is the cheaper of the two.
+    if (playbackFinished) {
+      track?.let { runCatching { it.release() } }
+    } else {
+      Log.w(TAG, "playback thread still in write() at stop — not releasing the track under it")
     }
     track = null
     runCatching { audioManager.removeOnCommunicationDeviceChangedListener(routeListener) }

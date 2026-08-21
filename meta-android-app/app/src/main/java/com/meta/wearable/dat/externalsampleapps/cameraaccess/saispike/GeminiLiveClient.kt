@@ -4,11 +4,10 @@
 
 // GeminiLiveClient — raw-WebSocket client for the Gemini Live API (BidiGenerateContent).
 //
-// The concierge server mints an ephemeral token (SessionBootstrap.token) that we use against the
-// v1alpha Live endpoint. We implement the wire protocol directly with OkHttp (the docs cover the
-// Python/JS SDKs + a raw-WS guide + an official ephemeral-token WS example). This is the client-side,
-// low-latency Live session: mic PCM16 up, model audio down, native VAD/turn-taking/barge-in. The
-// model's function-calls are relayed to the concierge WS as effects (see handleToolCall).
+// The device holds the user's own Gemini key and opens the v1alpha Live endpoint with it
+// (`BidiGenerateContent?key=`). We implement the wire protocol directly with OkHttp. This is the
+// client-side, low-latency Live session: mic PCM16 up, model audio down, native VAD/turn-taking/
+// barge-in. The model's function-calls are effects into the on-device FSM (see handleToolCall).
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 
@@ -96,7 +95,6 @@ class GeminiLiveClient(
         is GateAction.UserTranscript -> onTranscript("you", action.text)
         is GateAction.TurnComplete -> onTurnComplete()
         is GateAction.FlushPlayback -> onInterrupted()
-        is GateAction.ReleaseEffects -> onEffects(action.effects)
       }
     }
   }
@@ -236,11 +234,22 @@ class GeminiLiveClient(
       // Asked once per frame, not per part: re-reading the clock inside the loop could split a single
       // frame across the discard window's edge.
       val discarding = gate.shouldDiscardAudio()
-      for (i in 0 until parts.length()) {
-        val data = parts.getJSONObject(i).optJSONObject("inlineData")?.optString("data") ?: continue
-        if (discarding) continue // straggler from the turn the user just barged in on
-        gate.onAudioAccepted() // model is producing audio → mid-turn
-        onAudio(Base64.decode(data, Base64.NO_WRAP))
+      val hadTranscription =
+          sc.optJSONObject("outputTranscription")?.optString("text")?.isNotBlank() == true
+      for (action in LiveModelParts.classifyFrame(parts)) {
+        action.log?.let { onLog(it) }
+        val data = action.playAudioB64
+        if (data != null && !discarding) {
+          gate.onAudioAccepted() // model is producing audio → mid-turn
+          onAudio(Base64.decode(data, Base64.NO_WRAP))
+        }
+        // A text-only frame with no transcription is speech the log would otherwise never show.
+        // Skip when this same serverContent already carried outputTranscription (don't double it)
+        // and skip on barge-in (that turn was cut off).
+        val fallback = action.transcriptFallback
+        if (fallback != null && !discarding && !hadTranscription) {
+          run(gate.onSaiTranscript(fallback))
+        }
       }
     }
 
@@ -257,6 +266,11 @@ class GeminiLiveClient(
    */
   private fun handleToolCall(webSocket: WebSocket, toolCall: JSONObject) {
     val calls = toolCall.optJSONArray("functionCalls") ?: return
+    // FIRST, before a single call is dispatched. The effects below reach the FSM, which answers some
+    // of them by speaking — and a spoken line is a client turn, which cuts the model off unless the
+    // gate knows a turn is in flight. A tool call is the only evidence it gets that early; see
+    // LiveTurnGate.onToolCall.
+    gate.onToolCall()
     val effects = JSONArray()
     val responses = JSONArray()
     // The model routinely emits captureImage AND forwardToAgent in the SAME batch ("what am I
@@ -304,17 +318,7 @@ class GeminiLiveClient(
             webSocket,
             id,
             name,
-            JSONObject()
-                .put("result", "capture-started")
-                .put(
-                    "note",
-                    "The photo is being taken now, and the camera often needs more than one attempt. Say a " +
-                        "brief acknowledgment out loud right now, setting that expectation in the same breath: " +
-                        "\"let me take a look, this might take a few tries\" is the shape. ONE short line, and " +
-                        "about the tries rather than a duration — never put a number on how long it will take. " +
-                        "Do not describe anything yet: you have no photo. I will tell you the moment it lands " +
-                        "or fails.",
-                ),
+            JSONObject().put("result", "capture-started").put("note", CaptureNotes.STARTED),
         )
         onCaptureImage { ok, message ->
           val (effs, names) = gate.onCaptureSettled()
@@ -360,11 +364,17 @@ class GeminiLiveClient(
         }
         continue
       }
-      // Client-local tools (getSaiStatus/switchMachine/endCall) are handled on-device and NEVER
-      // forwarded to the concierge as effects — same contract as the reference web client's getSaiStatus.
+      // Client-local tools (getSaiStatus/getLocalTime/switchMachine/endCall) are handled on-device
+      // and NEVER forwarded to the concierge as effects — same contract as the reference web client's
+      // getSaiStatus. getLocalTime is the phone's clock: Gemini's own time is UTC, which is not the
+      // user's, so "what time is it" must not be answered without this.
       val response: JSONObject =
           when (name) {
             "getSaiStatus" -> JSONObject().put("status", onGetSaiStatus())
+            "getLocalTime" -> {
+              onLog("→ tool: getLocalTime")
+              JSONObject().put("time", describePhoneClock())
+            }
             "switchMachine" -> {
               val target = c.optJSONObject("args")?.optString("machine").orEmpty()
               onLog("↺ switchMachine: $target")

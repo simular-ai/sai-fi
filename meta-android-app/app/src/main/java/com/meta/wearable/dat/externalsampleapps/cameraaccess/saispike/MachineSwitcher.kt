@@ -49,8 +49,8 @@ object MachineSwitcher {
     if (match.machineId == currentMachineId) {
       return MachineSwitch.AlreadyOn("You're already on ${match.label}.")
     }
-    // The session prompt's "active machine" context was baked in at POST /session time and is now
-    // stale — the Live session is deliberately NOT re-minted (that would reset the conversation).
+    // The session prompt's "active machine" context is set at call start and is now
+    // stale — the Live session is deliberately NOT rebuilt (that would reset the conversation).
     // Reset the model's machine context through the tool response instead: it enters the model's
     // context without producing a spoken turn.
     return MachineSwitch.SwitchTo(

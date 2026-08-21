@@ -6,7 +6,7 @@ import org.junit.Test
 /**
  * resolveUrl decides whether the presenter feed is on at all, so its branching is worth pinning: an
  * explicit URL always wins, a LAN/dev cloud-api host derives one (the demo laptop runs both, so
- * pointing the app at it should be enough), and anything else stays OFF — deriving against staging
+ * pointing the app at it should be enough), and anything else stays OFF — deriving against production
  * would retry forever against a server that was never there.
  */
 class PresenterSocketTest {
@@ -14,7 +14,7 @@ class PresenterSocketTest {
   fun explicitUrlWins() {
     assertEquals(
         "ws://10.0.0.5:9000",
-        PresenterSocket.resolveUrl("ws://10.0.0.5:9000", "https://staging.cloud-api.simular.cloud"),
+        PresenterSocket.resolveUrl("ws://10.0.0.5:9000", "https://api.sai.simular.ai"),
     )
   }
 
@@ -36,9 +36,9 @@ class PresenterSocketTest {
   }
 
   @Test
-  fun offForStagingOrProduction() {
-    assertEquals("", PresenterSocket.resolveUrl("", "https://staging.cloud-api.simular.cloud"))
-    assertEquals("", PresenterSocket.resolveUrl("", "https://cloud-api.simular.cloud"))
+  fun offForNonLanHosts() {
+    assertEquals("", PresenterSocket.resolveUrl("", "https://api.sai.simular.ai"))
+    assertEquals("", PresenterSocket.resolveUrl("", "https://example.com"))
   }
 
   @Test

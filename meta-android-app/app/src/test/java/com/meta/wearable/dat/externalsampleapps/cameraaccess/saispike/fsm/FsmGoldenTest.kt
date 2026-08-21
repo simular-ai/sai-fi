@@ -2,10 +2,8 @@
 
 // The golden catalog runner.
 //
-// One JUnit case per scenario, named exactly as the server's catalog names it, so the two can be
-// reconciled mechanically — see docs/plans/golden-catalog-inventory.md in the server repo. A
-// scenario that quietly fails to be ported would otherwise be invisible: the suite would simply be
-// green with less in it.
+// One JUnit case per scenario. A scenario that quietly fails to be added would otherwise be
+// invisible: the suite would simply be green with less in it. PORTED_SCENARIO_COUNT pins the size.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm
 
@@ -80,10 +78,10 @@ class GoldenCatalogTest {
 
   @Test
   fun `the catalog is the size it is meant to be`() {
-    // Raise this as scenarios land; it must reach 62 before the TypeScript catalog is deleted.
-    // Reconcile with docs/plans/golden-catalog-inventory.md.
+    // Raise this as scenarios land. A catalog that silently shrinks is a suite that goes green
+    // with less in it.
     assertEquals(
-        "ported scenario count — see golden-catalog-inventory.md",
+        "ported scenario count",
         PORTED_SCENARIO_COUNT,
         GOLDEN_SCENARIOS.size)
   }

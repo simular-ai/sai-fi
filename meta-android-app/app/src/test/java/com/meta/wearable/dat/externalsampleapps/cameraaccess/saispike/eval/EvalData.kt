@@ -1,22 +1,23 @@
 /* sai-fi — voice concierge. */
 
-// The rubric — what "good" means for the concierge, shared with cloud-api.
+// The rubric — what "good" means for the concierge. `resources/eval/rubric.json` is its source.
 //
-// cloud-api is its source (`voice/eval/rubric.ts`), and it crosses as JSON via
-// `npm run -w cloud-api concierge:rubric`, the same hand-run crossing the parity fixtures use and
-// that `prompt-and-tools.json` uses in the other direction.
+// TWO HARNESSES READ IT, and they see different failures. `TranscriptEvalTest` drives the real model
+// over fixed transcripts with no FSM: good at phrasing and classification, blind to the queue,
+// because in that harness there isn't one. `LoopEvalTest` drives the real model through the real FSM
+// and a scripted agent: good at whether the conversation holds together over a task that actually
+// runs. Neither subsumes the other, and they must agree on what the rules SAY, or a behaviour
+// tightened in one stays loose in the other.
 //
-// It is SHARED rather than duplicated because two harnesses grade against it and they see different
-// failures. cloud-api's drives the real model over fixed transcripts with no FSM: good at phrasing
-// and classification, blind to the queue, because there isn't one. This repo's drives the real model
-// through the real FSM and a scripted agent: good at whether the conversation holds together over a
-// task that actually runs. Neither subsumes the other — but if they disagreed about what the rules
-// SAY, a behaviour tightened on one side would quietly stay loose on the other.
+// It stays JSON rather than becoming Kotlin string constants because the content is prose tuned
+// against observed model behaviour, sometimes several revisions deep: `blocked-on-user-not-on-others`
+// was rewritten because it keyed on the VERB ("waiting to hear") when the thing that matters is the
+// PARTY, and until then it flagged a line that did exactly what the rule wanted. Thirty-three rules of
+// that read better as a document than as escaped literals, and it is graded, never executed.
 //
-// It arrives as data rather than retyped Kotlin because the content is prose tuned against observed
-// model behaviour, sometimes several revisions deep: `blocked-on-user-not-on-others` was rewritten
-// because it keyed on the VERB ("waiting to hear") when the thing that matters is the PARTY, and
-// until then it flagged a line that did exactly what the rule wanted.
+// It used to be generated in cloud-api (`voice/eval/rubric.ts`) and hand-copied here. Nothing
+// checked the copy. It is written and reviewed here now, and the harness that read it from over
+// there came with it.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.eval
 
@@ -44,8 +45,8 @@ object EvalData {
   fun rubric(): List<Rule> {
     val text =
         checkNotNull(EvalData::class.java.getResourceAsStream("/eval/rubric.json")) {
-              "missing /eval/rubric.json — publish it from cloud-api with " +
-                  "`npm run -w cloud-api concierge:rubric`"
+              "missing /eval/rubric.json — it lives at " +
+                  "app/src/test/resources/eval/rubric.json"
             }
             .bufferedReader()
             .readText()
@@ -64,6 +65,6 @@ object EvalData {
   /** Look one up, failing loudly: a scenario naming a rule that no longer exists grades nothing. */
   fun rule(id: String): Rule =
       requireNotNull(rubric().firstOrNull { it.id == id }) {
-        "no rubric rule \"$id\" — it may have been renamed in cloud-api; re-publish the rubric"
+        "no rubric rule \"$id\" — check the id against resources/eval/rubric.json"
       }
 }

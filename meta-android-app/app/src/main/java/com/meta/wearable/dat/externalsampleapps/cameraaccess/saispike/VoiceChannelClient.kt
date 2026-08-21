@@ -48,10 +48,10 @@ object VoiceChannelClient {
    * programmatic channel when they were written and an old CLI must keep working. Nothing errors when
    * it is omitted; the answer is simply about somebody else's conversation.
    *
-   * A constant rather than a literal per call site because the omission has already happened twice
-   * over: `resetSession` here rotated the TERMINAL's session on a spoken "start fresh", while the
-   * per-call mint in [VoiceSession] named the channel correctly — two paths to the same endpoint,
-   * disagreeing. `POST /message` needs none of this: that route is per-channel by URL — the
+   * A constant rather than a literal per call site because the omission has already happened:
+   * `resetSession` rotated the TERMINAL's session on a spoken "start fresh", so the one command
+   * that exists to escape a poisoned transcript could not reach the transcript it was aimed at.
+   * `POST /message` needs none of this: that route is per-channel by URL — the
    * `/v1/agents` mount is `api`, `/v1/cli` is `cli` — so a send always lands in this client's own
    * conversation.
    */
@@ -60,8 +60,10 @@ object VoiceChannelClient {
   /**
    * The body for `POST /v1/agents/new-session` — rotate THIS client's conversation.
    *
-   * Shared by both callers so neither can forget the channel: the FSM's `resetSession` (the user
-   * saying "start fresh") and the per-call session mint.
+   * A helper for a single caller — the FSM's `resetSession`, on the user saying "start fresh" —
+   * because that caller forgetting the channel is the bug described above, and a named body is
+   * where the fix stays put. It was shared with a per-call mint until that mint was removed; a
+   * second caller appearing here is a sign somebody is rotating without being asked to.
    */
   fun newSessionBody(machineId: String): JSONObject =
       JSONObject().put("machineId", machineId).put("channel", API_CHANNEL)
@@ -145,16 +147,7 @@ object VoiceChannelClient {
             conn.inputStream.bufferedReader().use { reader ->
               readSseLines(reader) { payload ->
                 when (val out = turn.onPayload(payload)) {
-                  null -> {
-                    // NAME it. Most unmapped frames are envelope markers this client is right to
-                    // ignore, but a frame the server started sending and this client never learned
-                    // looks identical from here — and an anonymous "dropped something" line cannot
-                    // tell the two apart. The live-agent contract test reads these lines, so the
-                    // name is the evidence it works from.
-                    val type =
-                        runCatching { JSONObject(payload).optString("type") }.getOrNull().orEmpty()
-                    onLog("[voice] ignored frame: ${type.ifEmpty { "(untyped)" }}")
-                  }
+                  null -> onLog(describeIgnoredFrame(payload))
                   else -> onEvent(out)
                 }
               }
@@ -234,7 +227,7 @@ private suspend fun readSseLines(reader: BufferedReader, onPayload: suspend (Str
  *
  * - `text-delta` carries a FRAGMENT. The FSM's `Text` is fragment-tolerant (it only resets dead-air
  *   backoff), so each delta is passed straight through rather than buffered — buffering here would
- *   mean holding the answer until `text-end`, and the point of streaming is that she can start
+ *   mean holding the answer until `text-end`, and the point of streaming is that it can start
  *   speaking before the agent has finished.
  * - `reasoning-*` is mid-turn thinking. It maps to `Progress`, which is silent by design.
  * - `finish` is the turn ending, so it becomes `Complete` — the FSM's own end-of-turn signal. There
@@ -289,6 +282,35 @@ class TurnEvents {
   }
 }
 
+/**
+ * The log line for a frame that mapped to nothing.
+ *
+ * NAME it. Most unmapped frames are envelope markers this client is right to ignore
+ * (`text-start`/`text-end` around the deltas it does read), but a frame the server started sending and
+ * this client never learned looks identical from here — and an anonymous "dropped something" line
+ * cannot tell the two apart. The live-agent contract test reads these lines, so the name is the
+ * evidence it works from.
+ *
+ * A `data-*` frame additionally gets its FIELD NAMES, because the two cases stop being equivalent
+ * there: a bookend carries nothing worth having, whereas a custom data part is the server handing over
+ * state, and every other one of those (`data-status`, `data-progress`, `data-approval-request`) has a
+ * handler. On 2026-08-19 the live tier showed `data-session` arriving once per turn with no handler at
+ * all, and the log could not say what was in it — which is the gap this closes.
+ *
+ * Names only, never values: this log is mirrored to the presenter dashboard, and a data part can carry
+ * agent-derived text. Knowing a frame has an `id` and a `title` is what tells you whether to write a
+ * branch for it; the contents are not needed for that and are not ours to project on a wall.
+ */
+fun describeIgnoredFrame(payload: String): String {
+  val json = runCatching { JSONObject(payload) }.getOrNull()
+  val type = json?.optString("type").orEmpty().ifEmpty { "(untyped)" }
+  if (json == null || !type.startsWith("data-")) return "[voice] ignored frame: $type"
+  val fields = json.optJSONObject("data")?.keys()?.asSequence()?.sorted()?.toList().orEmpty()
+  val where = if (json.has("data")) "data" else "frame"
+  return if (fields.isEmpty()) "[voice] ignored frame: $type (no $where fields — nothing carried)"
+  else "[voice] ignored frame: $type — UNHANDLED data part, $where fields: ${fields.joinToString(", ")}"
+}
+
 fun parseAgentEvent(raw: String): AgentEvent? {
   val json = runCatching { JSONObject(raw) }.getOrNull() ?: return null
   val data = json.optJSONObject("data")
@@ -304,8 +326,8 @@ fun parseAgentEvent(raw: String): AgentEvent? {
         json.optString("toolName").takeIf { it.isNotEmpty() }?.let {
           AgentEvent.Progress(it, tool = it)
         }
-    // A failed STEP, not a failed turn. `failed` is what the concierge reacts to; without it she
-    // has no idea anything went wrong and fills the silence with a result she never received.
+    // A failed STEP, not a failed turn. `failed` is what the concierge reacts to; without it Sai
+    // has no idea anything went wrong and fills the silence with a result it never received.
     "tool-output-error" ->
         AgentEvent.Progress(
             json.optString("errorText").ifEmpty { "a step failed" },
