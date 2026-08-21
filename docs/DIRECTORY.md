@@ -7,7 +7,7 @@ read [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md).
 
 **One sentence on the app:** an Android app that puts a voice concierge on Meta Ray-Ban glasses — it
 opens a Gemini Live audio session directly with the user's own key, runs the conversation's state
-machine itself, and talks to Sai's cloud-api only to reach the agent.
+machine itself, and talks to the Sai API only to reach the agent.
 
 ## Where to start reading
 
@@ -24,9 +24,11 @@ machine itself, and talks to Sai's cloud-api only to reach the agent.
 | Path | What it is |
 | --- | --- |
 | `README.md` | Front door: what the app is, how to build it, how the tests gate CI. |
+| `CHANGELOG.md` | Tagged releases. |
+| `SECURITY.md` | How to report a vulnerability, and where credentials live. |
 | `LICENSE` | Licence for this repo (Meta attribution included). |
 | `licenses/` | The two bundled font licences (Manrope, JetBrains Mono). |
-| `docs/` | This folder — the four Markdown docs described below. |
+| `docs/` | This folder — the Markdown docs described below. |
 | `meta-android-app/` | **The app.** A standalone Kotlin/Gradle Android project. |
 | `presenter/` | A tiny Node/TypeScript demo dashboard (DEBUG-only spectator feed). |
 | `.github/workflows/android.yml` | CI: builds the app and runs the JVM unit tests. |
@@ -36,8 +38,9 @@ machine itself, and talks to Sai's cloud-api only to reach the agent.
 | File | What it is |
 | --- | --- |
 | `SAI_GLASSES_APP.md` | The architecture overview — read this first. |
-| `CONCIERGE_CLIENT_PROTOCOL.md` | The client half of the wire contract (endpoints, WS message tables, close codes, the device tools). Vendored here so the repo is self-contained. |
-| `ON_DEVICE_CHECK.md` | A runnable checklist for verifying a build on real glasses — eight checks, each naming what it exercises and how it fails. |
+| `CONCIERGE_CLIENT_PROTOCOL.md` | The client half of the wire contract (endpoints, the device tools). |
+| `ON_DEVICE_CHECK.md` | A runnable checklist for verifying a build on real glasses — ten checks, each naming what it exercises and how it fails. |
+| `ON_DEVICE_DEMO_FLOW.md` | The same ten checks as a spoken script. |
 | `VOICE_FSM.md` | The design of the conversation state machine this app owns — modes, effects, the admission rule, the races, and why each rule exists. Read before changing anything under `fsm/`. |
 | `DIRECTORY.md` | This file. |
 
@@ -78,11 +81,15 @@ below — the path still carries the app's earlier name).
 
 | File (`…/saispike/`) | What it does |
 | --- | --- |
-| `CallService.kt` | Foreground service that **owns the call graph** (audio + Gemini Live + the concierge socket + reconnect). The heart of the app. |
+| `CallService.kt` | Foreground service that **owns the call graph** (audio + Gemini Live + VoiceSession + reconnect). The heart of the app. |
 | `CallController.kt` | Process singleton; turns UI/gesture actions into service intents and exposes an observable `StateFlow<State>`. |
 | `CallNotifications.kt` | The ongoing-call notification and the "why it ended" card (wording is the pure, testable `CallNotificationText`). |
 | `AudioIo.kt` | 16 kHz capture / 24 kHz playback; glasses SCO route with phone fallback, full-duplex for barge-in. |
 | `GeminiLiveClient.kt` | Raw-WebSocket Gemini Live client: setup, realtime PCM, transcripts, barge-in, function-call routing. |
+| `LiveModelParts.kt` | Classifies one Live `modelTurn` part: play, drop thought-audio, transcript fallback. |
+| `LiveTurnGate.kt` | When a nudge may enter the Live session — not mid-utterance. |
+| `CaptureCue.kt` | Two short rising sine blips played the instant a capture starts. |
+| `CaptureNotes.kt` | Silent tool-response notes handed to Live when a capture starts or a task is held for the photo. |
 
 ### The concierge link (client ⇄ server)
 
@@ -90,11 +97,11 @@ below — the path still carries the app's earlier name).
 | --- | --- |
 | `ConciergeClient.kt` | HTTP calls: list machines, recall history, upload. |
 | `VoiceChannelClient.kt` | The `/v1/agents/*` surface: `POST /message` (whose response IS the turn's stream), `abort` / `new-session` / `approve`, and the translation from the AI-SDK stream vocabulary into `AgentEvent`. |
-| `VoiceSession.kt` | One call's concierge: the FSM, its two ports, the SSE reader, reconnect, and the cost guard. Replaces the old WebSocket. |
+| `VoiceSession.kt` | One call's concierge: the FSM, its two ports, the SSE reader, reconnect, and the cost guard. |
 | `HttpAgentBridge.kt` | The FSM's `AgentBridge` over HTTP, plus the photo stash and the location line folded into a task's text. |
 | `VoiceConverters.kt` | Typed agent events back to the JSON that `ActivityLog` and `AgentEventRouter` read. |
-| `ConciergeProtocol.kt` | Kotlin port of the server's nudge logic (kept honest by parity fixtures). |
-| `ActivityLog.kt` | Kotlin port of the server's activity-log describer; feeds `getSaiStatus` and the UI. |
+| `ConciergeProtocol.kt` | The canonical nudge wording (pinned by the string goldens). |
+| `ActivityLog.kt` | Activity-log describer; feeds `getSaiStatus` and the UI. |
 | `AgentEventRouter.kt` | Routes incoming agent events to speech/log/UI. |
 
 ### Glasses (Meta DAT)
@@ -114,15 +121,17 @@ below — the path still carries the app's earlier name).
 | `HangupPolicy.kt` | How/when a call ends (spoken goodbye, delays, terminal reasons). |
 | `HeldNudgeQueue.kt` | Defer nudges until a turn completes; flush on barge-in. |
 | `MachineSwitcher.kt` | The `switchMachine` transition without touching the live audio. |
+| `WakePolicy.kt` | Whether a machine wake is worth announcing, and which line. |
+| `LeavingWorkPolicy.kt` | Ask before hanging up or switching machines with work outstanding. |
 
 ### The conversation state machine — `…/saispike/fsm/`
 
-What happens between the user speaking and the agent working, and back. Ported from the server; see
+What happens between the user speaking and the agent working, and back. See
 [`VOICE_FSM.md`](VOICE_FSM.md) for why each rule exists. Everything except `Concierge.kt` is pure —
 no coroutines, no clock, no I/O — which is what makes the golden catalog runnable as JVM tests.
 
 **This drives every call.** `CallService.buildConcierge` constructs a `VoiceSession` per call, the
-model's tool calls go into `applyEffects`, and the WebSocket path it replaced is deleted.
+model's tool calls go into `applyEffects`.
 
 | File (`…/saispike/fsm/`) | What it does |
 | --- | --- |
@@ -148,6 +157,7 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 | `Prefs.kt` | Small persisted prefs: the last-picked machine, the two Settings values (developer mode, ask-first seconds), and the one-shot permission-prompt flags. |
 | `PhoneLocation.kt` | Reads a fresh location fix when the model asks for one. |
 | `CallObserver.kt` | The seam a spectator watches a call through (`Noop…` is the release default). |
+| `CloudApiHeaders.kt` | Auth + optional `x-sai-version` on every Sai API call, in one place. |
 
 ### Debug-only presenter feed
 
@@ -161,7 +171,7 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 
 | Path | What it is |
 | --- | --- |
-| `voice-profile.json` | The system prompt (41 blocks), the 18 tool declarations, the model and the voice. **Generated** from the server's source before it was deleted — the wording is load-bearing, so it was never retyped. The same bytes are vendored to `app/src/test/resources/parity/prompt-and-tools.json` and read by cloud-api's eval. |
+| `voice-profile.json` | The system prompt, the tool declarations, the model and the voice. Ships with the app. It is on the unit-test classpath too (`sourceSets` in `build.gradle.kts`), so `VoiceProfileTest` and `LiveBrain` grade the file the app loads. |
 
 ### Resources — `app/src/main/res/`
 
@@ -174,16 +184,45 @@ model's tool calls go into `applyEffects`, and the WebSocket path it replaced is
 
 ### Tests — `app/src/test/java/…/saispike/`
 
-Fast JVM unit tests (23 classes, 245 tests, no device/emulator needed). Three kinds:
+The JVM unit tests, no device or emulator needed — everything below runs on `./gradlew
+:app:testDebugUnitTest` except the tiers that cost money and the golden generator, each gated on an
+environment variable and skipping itself otherwise. Five kinds:
 
 - **`*Test.kt`** — behaviour tests for one class each (`GlassesLinkTest`, `HangupPolicyTest`,
   `ReconnectPolicyTest`, `GreetingGateTest`, `HeldNudgeQueueTest`, `MachineSwitcherTest`,
-  `AgentEventRouterTest`, `ActivityLogTest`, `ConciergeProtocolTest`,
-  `CallNotificationTextTest`, `PresenterSocketTest`, `AskFirstStepperTest`, `ui/SaiTabTest`).
-- **`*ParityTest.kt`** — replay a shared fixture to prove the Kotlin port matches the server
-  (`ConciergeProtocolParityTest`, `ActivityLogParityTest`).
-- **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 59 scenarios ported from the
-  server's catalog, each naming the failure it prevents.
+  `WakePolicyTest`, `LeavingWorkPolicyTest`, `CaptureCueTest`, `CaptureNotesTest`,
+  `LiveModelPartsTest`, `AgentEventRouterTest`, `ActivityLogTest`, `ConciergeProtocolTest`,
+  `LiveTurnGateTest`, `VoiceChannelClientTest`, `HttpAgentBridgeTest`, `CallNotificationTextTest`,
+  `PresenterSocketTest`, `AskFirstStepperTest`, `ui/SaiTabTest`).
+- **`*GoldenTest.kt`** — replay the committed JSON in `resources/parity/` to pin every string the
+  concierge speaks or shows (`ConciergeProtocolGoldenTest`, `ActivityLogGoldenTest`), plus the
+  assertions about what those strings SAY, which a byte diff cannot tell you. `GoldenFixtures.kt`
+  builds them from the real helpers on a fixed clock and `RegenerateGoldensTest`
+  (`SAI_REGEN_GOLDENS=1`) is the only thing that writes them.
+- **`fsm/`** — the state machine's own tests, including `FsmGoldenTest`: 63 scenarios, each naming
+  the failure it prevents.
+- **`conversation/`** — the closed loop, with everything real except the brain and the agent: a fake
+  brain's tool calls go through the real `LiveTurnGate`, `Concierge` and `HttpAgentBridge` to a
+  `ScriptedAgent` that implements `VoiceTransport`, the seam *under* the bridge — so a wire bug has
+  nowhere to hide. `BargeInConversationTest` and `QueueConversationTest` cover the two hardest paths, `AbortConversationTest` the
+  one that stops work,
+  `LongConversationTest` the state that only accumulates, and `TimingMatrixTest` replays one
+  conversation at seven speeds asserting invariants rather than orderings, because every barge-in ⇄
+  queue bug on record is a race. `PresenterPublisher` can mirror a harness run to the dashboard.
+- **The paid tiers** — off by default, each behind its own switch: `LiveAgentTest` /
+  `SummaryFixLiveTest` (`SAI_LIVE_AGENT=1`) drive a real Sai API to catch **contract drift** and
+  nothing else, joined by `LiveQueueTest`, which is the only place the queue is admitted behind a task
+  that is genuinely still running and the only place `abort` / `new-session` reach a real endpoint; `eval/LoopEvalTest` (`SAI_CONVERSATION_EVAL=1`) runs the real model through the real
+  FSM and grades the transcript against `eval/rubric.json`; `eval/TranscriptEvalTest`
+  (`SAI_TRANSCRIPT_EVAL=1`) runs it over the 33 fixed transcripts in `eval/Transcripts.kt` with no FSM,
+  grading phrasing by judge and effect choice deterministically; `DemoFlowTest` (`SAI_DEMO=1`) drives a
+  real model and a real agent end to end, paced for the presenter so a demo can be rehearsed without
+  hardware.
+
+  The two judged tiers share the rubric and see different failures, which is why both exist — one
+  drives a queue that really exists, the other conversations that hold still. `EvalDataTest` asserts
+  the wiring between the catalogue and the transcripts (every target resolves, none targets a rule the
+  judge cannot grade, every transcript checks something) for free, on every push.
 
 ---
 
@@ -196,4 +235,5 @@ DEBUG builds.
 | --- | --- |
 | `server.ts` | The dashboard server (receives the DEBUG presenter feed). |
 | `public/index.html` | The dashboard page. |
+| `watch.mjs` | A terminal watcher for the same feed — the dashboard without a browser. |
 | `package.json`, `package-lock.json`, `tsconfig.json` | Node project config. |

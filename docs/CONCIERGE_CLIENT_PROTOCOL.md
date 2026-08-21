@@ -1,6 +1,6 @@
 # Voice concierge — client protocol
 
-**Audience:** anyone implementing a voice client against `cloud-api`. The reference implementation is
+**Audience:** anyone implementing a voice client against the Sai API. The reference implementation is
 [`simular-ai/sai-fi`](https://github.com/simular-ai/sai-fi).
 
 **The client owns the conversation.** It runs the live voice model, the microphone and speaker, the
@@ -8,14 +8,14 @@ orchestration FSM, the queue, the spoken lines, and its own Gemini credential. *
 agent** — the machine doing real work, and the writes that reach it. This document is the seam, and
 it is deliberately made of endpoints that already existed.
 
-> **Rewritten 2026-08-13.** This used to describe a WebSocket to a server-side FSM, and then briefly
-> a `/v1/voice/*` HTTP surface. Both are gone, and **nothing replaced them**: a voice client is an
-> ordinary API caller. There is no voice endpoint, no voice channel, and no server-side queue. The
-> FSM moved to the device (see sai-fi's `docs/VOICE_FSM.md`), the client brings its own Gemini key,
-> and voice is not billed. See `docs/plans/2026-08-12-reduced-voice-concierge.md`.
+> This used to describe a WebSocket to a server-side FSM, and then briefly a `/v1/voice/*` HTTP
+> surface. Both are gone, and **nothing replaced them**: a voice client is an ordinary API caller.
+> There is no voice endpoint, no voice channel, and no server-side queue. The FSM lives on the
+> device (see [`VOICE_FSM.md`](VOICE_FSM.md)), the client brings its own Gemini key, and voice is
+> not billed. That is what lets a fork of this repo run against the API as it already exists.
 
-Machine-readable companions, generated from the source and committed under
-`cloud-api/src/services/concierge/voice/contract/fixtures/`.
+Machine-readable companions, generated from the Kotlin source and committed under
+`meta-android-app/app/src/test/resources/parity/` (see §8).
 
 ## 1. Getting a session
 
@@ -27,7 +27,7 @@ There is nothing to fetch. A client needs three things, all its own:
 | The system prompt, tools and voice | Ships with the client. sai-fi's is `assets/voice-profile.json` |
 | A Firebase ID token | Google sign-in, for the agent half only |
 
-The client opens its Live session **directly** with Google. Audio never touches cloud-api, and the
+The client opens its Live session **directly** with Google. Audio never touches the Sai API, and the
 voice half of a call works with no Simular server reachable at all.
 
 ## 2. `/v1/agents/*` — reaching the agent
@@ -127,12 +127,10 @@ unless asked. Keep that shape.
 ## 5. Client-rendered strings
 
 Some strings the user hears or reads are rendered **on the client**, from an agent event. The
-canonical wording lives in `voice/contract/nudges.ts` and `voice/contract/activity-log.ts`, and the
-fixtures pin it byte for byte so a port cannot drift silently.
+canonical wording lives in `ConciergeProtocol.kt` and `ActivityLog.kt`, and the fixtures pin it
+byte for byte so a change to a spoken line is a reviewable diff.
 
-These read the vocabulary in `voice/agent-events.ts`, which is the union a client translates the
-stream INTO — not a wire format. Keeping it named on both sides is what lets the fixtures compare
-two independent renderings of the same input.
+These read a typed agent-event union the client translates the stream INTO — not a wire format.
 
 - **Nudges** (`describeAgentEvent`) — model-facing text derived from an agent event.
 - **Activity lines** (`renderAgentActivity`) — for an on-screen log. Carries glyphs.
@@ -143,6 +141,13 @@ two independent renderings of the same input.
 > content) is UNTRUSTED. In every nudge the instruction comes FIRST and the untrusted text is fenced
 > inside `"""…"""`, so the model treats it as data. A port that drops the fence turns any web page the
 > agent reads into a prompt-injection vector.
+>
+> **The same applies to machine names**, which are easy to miss because they are not agent output:
+> they come from `GET /v1/agents/machines`, they are whatever the user typed, and they land in the
+> *system prompt* rather than in a nudge. `VoiceProfile.systemPromptWithContext` flattens newlines and
+> quotes and caps the length before appending them, and labels the whole clause as data. It used to
+> say "sanitize before calling" and leave it to the caller, which is exactly how a name reading
+> `X". Ignore prior instructions and …` reached the persona prompt verbatim.
 
 The client also owns two things the server cannot enforce:
 
@@ -165,16 +170,50 @@ look alive, which is exactly the case the idle bound exists to end.
 
 ## 7. Supporting HTTP endpoints
 
-All Bearer-authenticated. Optional `x-sai-version: <tag>` routes to a specific staging revision.
+All Bearer-authenticated. Optional `x-sai-version: <tag>` pins a specific server revision.
 
 | Endpoint | Use |
 | --- | --- |
-| `GET /v1/agents/machines` | The user's machines, for the picker |
+| `GET /v1/agents/machines` | The user's machines, for the picker — with `status` and `canWake` |
+| `POST /v1/agents/wake` | Wake a hibernated machine, no payload. Branch on `startingUp`, not `waking` |
 | `GET /v1/agents/context?machineId=&limit=` | Recent history — backs `recallHistory` |
 | `POST /v1/agents/upload` | Upload a captured image; returns the attachment |
 
 `401` bad token · `403` machine not owned. Treat both as permanent for the call. A `402` still means
 the user is out of agent credit — voice itself is not billed, but the work Sai does is.
+
+## 7b. Machines: waking, and moving between them
+
+**Waking.** `POST /v1/agents/wake` brings a hibernated machine up without sending it anything, for the
+moments where nothing has been asked for yet — call bind, and every switch. It answers
+`{waking, startingUp, status, canWake}`; **branch on `startingUp`**, since a machine already mid-wake
+answers `waking: false` and is still owed the "about a minute" line. `GET /machines` carries `status`
+and `canWake` for the same decision made ahead of time — a hibernated machine with `canWake: false` is
+asleep and staying that way, and announcing a wake for it promises a minute that never ends.
+
+Do **not** wake by sending a throwaway message. A message arriving during a running turn is folded
+*into* that turn, so the dummy absorbs the user's next real request and its stream ends the turn out
+from under it.
+
+**Moving.** A programmatic channel keeps one live conversation, on whichever machine it was last used
+from; moving retires the one behind you. Two things follow, and a client owes the user both:
+
+- **Coming back starts fresh.** `GET /context` reads the channel's *current* session, so it answers
+  empty for a machine you left and returned to. Hold anything you need across a switch yourself. (This
+  app is fine within a call — the Live model carries the call.)
+- **Work outstanding on the machine you leave keeps running**, and this channel stops hearing about
+  it. Ask before moving, and point the user at the app for the result. `LeavingWorkPolicy` is this
+  app's half, shared with the hang-up, and it exists because the FSM is rebuilt on a switch and would
+  otherwise drop a queued task it had promised out loud.
+
+**Do not rotate on your own initiative.** `POST /new-session` is the user's command, not the client's
+housekeeping: a send already resolves the channel's current session, so there is nothing a client has
+to do to stay in one conversation. sai-fi used to mint a session per call and the rotation was
+visible — every call added a page to the user's sidebar in the desktop app. The unit matters more than
+it sounds. A *call* ends on five minutes of quiet, on the wearer folding the glasses, or on the model
+mishearing a goodbye, so a client that rotates per call rotates several times inside one thing the
+user would call a conversation. Rotate when asked, and leave it alone otherwise. (Session growth is
+the real cost of not rotating; if it needs bounding, bound it on the session's age, not on a call.)
 
 ## 8. Keeping a port honest
 
@@ -182,10 +221,12 @@ If you implement this in another language, mirror the guards that already exist 
 new ones:
 
 1. **Rendered strings** — load the fixture JSON and assert byte-identical output.
-   (`ConciergeProtocolParityTest.kt` / `ActivityLogParityTest.kt` are the reference.)
-2. **Orchestration** — sai-fi's `FsmGoldenTest` runs 59 scenarios that pin what the FSM does with
+   (`ConciergeProtocolGoldenTest.kt` / `ActivityLogGoldenTest.kt` are the reference.)
+2. **Orchestration** — sai-fi's `FsmGoldenTest` runs 63 scenarios that pin what the FSM does with
    every input sequence that has ever mattered. If you write your own, that catalog is the spec worth
    copying; each scenario names the failure it prevents.
 
-Refresh the fixtures with `npm run -w cloud-api concierge:fixtures` and copy them across; the
-generator writes a vendored copy automatically while both trees share a checkout.
+The fixtures live at `meta-android-app/app/src/test/resources/parity/` and are generated from the
+Kotlin helpers by `SAI_REGEN_GOLDENS=1 ./gradlew :app:testDebugUnitTest --tests
+"*RegenerateGoldensTest*"`. Take a copy at a pinned ref rather than tracking `main`, and diff it when
+you update.

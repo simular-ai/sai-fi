@@ -38,10 +38,11 @@ gemini_api_key=
 
 # ── Required to RUN: the concierge backend ───────────────────────────────────────────────────────
 
-# cloud-api base. The shared staging gateway is the default in build.gradle.kts; set this to point
-# somewhere else. The app calls /v1/voice/* over HTTPS — no `adb reverse` needed. This is only for
-# reaching your Sai AGENT; the voice conversation itself needs nothing from it.
-concierge_url=https://staging.cloud-api.simular.cloud
+# The Sai API base — the public production host, and the one to use unless you work at Simular. The
+# app calls /v1/agents/* over HTTPS, so no `adb reverse` is needed. This is only for reaching your Sai
+# AGENT; the voice conversation itself needs nothing from it and costs you nothing here.
+
+sai_api_url=https://api.sai.simular.ai
 
 # ── Required to RUN: Google sign-in (Firebase ID token) ──────────────────────────────────────────
 
@@ -55,13 +56,12 @@ web_client_id=
 
 # ── Optional ─────────────────────────────────────────────────────────────────────────────────────
 
-# Pin the app to one server revision instead of the shared staging default. Sent as the
-# `x-sai-version` header on every cloud-api call; the staging gateway routes to that revision. This
-# is how an on-device check exercises a specific PR's server rather than whatever staging is serving.
+# Pin the app to one server revision. Sent as the `x-sai-version` header on every Sai API call.
+# Leave blank against production — most hosts ignore an unset header and serve their default.
 sai_version_tag=
 
 # Presenter feed (DEBUG builds only, LAN-only plaintext ws://). Leave blank to disable; if
-# concierge_url already points at a LAN/dev host the URL is derived from it.
+# sai_api_url already points at a LAN/dev host the URL is derived from it.
 presenter_url=
 presenter_key=
 

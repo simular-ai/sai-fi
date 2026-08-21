@@ -1,15 +1,15 @@
 # sai-fi — the Android module
 
-The app itself: a foreground service that runs a Gemini Live audio session, relays to Sai's cloud API
-over a WebSocket, and drives the glasses' microphone, speaker and camera through Meta's Device Access
+The app itself: a foreground service that runs a Gemini Live audio session, relays work to Sai's
+API over HTTP, and drives the glasses' microphone, speaker and camera through Meta's Device Access
 Toolkit.
 
 Start at the [repository README](../README.md) for what this is and how to get a call running. This
 file is the module's own reference — the one thing you cannot get anywhere else being the
 **secrets table** below, which is exhaustive.
 
-- `docs/SAI_GLASSES_APP.md` — architecture: modules, call phases, DAT platform facts.
-- `docs/ON_DEVICE_CHECK.md` — verify a build on real hardware: seven checks, ~15 minutes.
+- `docs/SAI_GLASSES_APP.md` — architecture: modules, the two links, DAT platform facts.
+- `docs/ON_DEVICE_CHECK.md` — verify a build on real hardware: ten checks.
 
 Derived from Meta's public **CameraAccess** DAT sample; the build files and manifest still carry
 Meta's copyright headers, and the concierge implementation under `app/src/main/java/.../saispike/`
@@ -43,13 +43,13 @@ this table when something "builds fine but doesn't work".
 | `github_token` | Pulling the DAT SDK from GitHub Packages | Dependency resolution fails — **the one key that breaks the build** |
 | `mwdat_application_id` | Meta DAT app registration (manifest placeholder) | Builds, but Meta AI won't grant a device session |
 | `mwdat_client_token` | Meta DAT app registration (manifest placeholder) | Same as above |
-| `concierge_url` | cloud-api base URL | Defaults to `https://staging.cloud-api.simular.cloud` |
-| `sai_version_tag` | `x-sai-version` header, to pin a PR's staging revision | Shared staging default |
+| `sai_api_url` | The Sai API base. Defaults to `https://api.sai.simular.ai` | An empty value fails at runtime with `no sai_api_url` |
+| `sai_version_tag` | `x-sai-version` header, to pin a server revision | Host default |
 | `firebase_app_id` | Google Sign-In | Sign-in disabled (`SaiAuth.isConfigured` false) |
 | `firebase_api_key` | Google Sign-In | Sign-in fails |
 | `firebase_project_id` | Google Sign-In | Sign-in fails |
 | `web_client_id` | Google Sign-In — the **Web** OAuth client id | Sign-in disabled |
-| `presenter_url` | Demo dashboard feed (debug builds only) | Derived from `concierge_url` when that host is a LAN address; otherwise off |
+| `presenter_url` | Demo dashboard feed (debug builds only) | Derived from `sai_api_url` when that host is a LAN address; otherwise off |
 | `presenter_key` | Demo dashboard shared secret | Presenter accepts unauthenticated publishers |
 | `release_store_file` / `release_store_password` / `release_key_alias` / `release_key_password` | Signing release APKs | No `release` signing config → `app-release-unsigned.apk`, which won't install |
 
@@ -62,12 +62,14 @@ this table when something "builds fine but doesn't work".
 - **`mwdat_application_id` / `mwdat_client_token`** — from the app registered in the Wearables
   Developer Center. The client token is a real credential; it used to be hardcoded in
   `AndroidManifest.xml` and was moved out precisely because this tree is open-source.
-- **Firebase keys** — from the `ai.simular.saiglasses` Android app in the simular Firebase project.
-  If you have a `google-services.json` for that project you can read all four out of it (the build
-  won't use the file, but it's a convenient source): `firebase_app_id` is the client's
-  `mobilesdk_app_id`, `firebase_api_key` is its `api_key[0].current_key`, `firebase_project_id` is
-  `project_info.project_id`, and `web_client_id` is the `oauth_client` entry with `"client_type": 3`
-  (**web**, not the Android client — Firebase rejects the token otherwise).
+- **Firebase keys** — from the Firebase project the Sai API verifies tokens against. For the public
+  Sai API that is Simular's project: register this app's package (`ai.simular.saiglasses`) and the
+  debug SHA-1 below. If you have a `google-services.json` for that project you can read all four out
+  of it (the build won't use the file, but it's a convenient source): `firebase_app_id` is the
+  client's `mobilesdk_app_id`, `firebase_api_key` is its `api_key[0].current_key`,
+  `firebase_project_id` is `project_info.project_id`, and `web_client_id` is the `oauth_client`
+  entry with `"client_type": 3` (**web**, not the Android client — Firebase rejects the token
+  otherwise). A fork pointed at its own backend uses that backend's Firebase project.
 - **Presenter keys** — start the laptop server with
   `npm install && npm run presenter -- --key <secret> --port 8899` from `presenter/`; it prints the
   exact `presenter_url` / `presenter_key` lines to paste in.
@@ -100,7 +102,7 @@ github_token=ghp_xxxxxxxxxxxxxxxxxxxx
 mwdat_application_id=
 mwdat_client_token=
 
-concierge_url=https://staging.cloud-api.simular.cloud
+sai_api_url=https://api.sai.simular.ai
 sai_version_tag=
 
 firebase_app_id=1:000000000000:android:0000000000000000
@@ -121,9 +123,9 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ```
 
 `--rerun` matters: without it the test task reports `UP-TO-DATE` from cache and verifies nothing.
-The repo CI runs the same assemble + unit-test gate — 97 JVM tests across 14 classes, including the
-cross-port parity tests that hold the Kotlin and TypeScript implementations of the nudge strings, the
-activity log and the WS protocol to the same fixtures. On-device and by-ear checks are still manual.
+The repo CI runs the same assemble + unit-test gate — the JVM unit tests, including the string goldens that
+pin every line the concierge speaks or shows byte for byte, the 63-scenario FSM golden catalog, and the
+conversation harness. On-device and by-ear checks are still manual.
 
 In Android Studio: open the `meta-android-app` folder (not its parent), fill in `local.properties`,
 **File > Sync Project with Gradle Files**, then Run.

@@ -5,8 +5,8 @@ between the agent reporting and the user hearing about it. It lives in
 `meta-android-app/…/saispike/fsm/`.
 
 **Status:** live. `CallService` builds a `VoiceSession` per call and the model's tool calls go
-straight into it; the WebSocket and the server-side FSM it used to talk to are both deleted. What is
-still open is listed under "Where this is going" at the end.
+straight into it. The conversation used to live behind a WebSocket to a server-side FSM; both are
+gone. What is still open is listed under "Where this is going" at the end.
 
 This is a design doc, not an API reference — the KDoc on each class covers the *what*. What follows
 is the *why*, because most of these rules exist to prevent a specific failure that was seen on a real
@@ -41,7 +41,7 @@ programmatic channel.
 ### Your own Gemini key
 
 Put `gemini_api_key` in `meta-android-app/local.properties` and build. That is the same route
-`presenter_key`, `firebase_api_key` and `concierge_url` already take, and it is listed with them in
+`presenter_key`, `firebase_api_key` and `sai_api_url` already take, and it is listed with them in
 the README key table.
 
 There is no server-minted token and no fallback to one. **The voice half of this app needs no
@@ -64,7 +64,7 @@ Everything in `State.kt`, `Effects.kt`, `Speech.kt` and `AgentIngest.kt` is pure
 input go in, a new state comes out. No coroutines, no clock, no I/O. `Concierge.kt` is the only part
 that suspends, and the ports (`AgentBridge`, `VoiceChannel`) are the only way it reaches the world.
 
-That split is what makes 59 golden scenarios runnable as plain JVM tests. It is the same shape
+That split is what makes 63 golden scenarios runnable as plain JVM tests. It is the same shape
 `GlassesLink` uses, for the same reason.
 
 **Do not make the pure parts call the clock or the network.** The moment they do, the catalog stops
@@ -104,7 +104,7 @@ to different questions.
 
 ## 4. Effects: the conversation is open, the capabilities are not
 
-The model can say anything. It can *do* only the fifteen things in `Effects.kt`. `parseEffect` is the
+The model can say anything. It can *do* only the fourteen things in `Effects.kt`. `parseEffect` is the
 boundary, and an effect it does not recognise — or whose payload is the wrong shape — is **dropped**,
 not guessed at. A newer model inventing a capability does not get to exercise it.
 
@@ -115,6 +115,9 @@ The parse rules are deliberately asymmetric, and the asymmetry is the contract:
 - `askAndWait` and `setState` **reject outright** on a bad enum — an invented mode must never become
   a state.
 - An unrecognised `urgency` **degrades to normal** rather than dropping the task.
+- An unrecognised `interrupt` **`scope` widens to `everything`**, for the same reason pointed the
+  other way: a bare "stop" means stop, and a scope a build does not know must never quietly
+  narrow a cancellation into leaving work running the user believes they stopped.
 
 `askAndWait` does **not** speak. It is a pure state signal: the Live model has already voiced the
 question, and speaking it again doubles it up and interrupts the model mid-sentence.
@@ -152,6 +155,33 @@ hears "on it" waits for a result nothing is producing. So the spoken line names 
 
 > "Got it — I'll start that as soon as I'm done with: …"
 
+## 6b. Two questions the FSM asks before it acts, each exactly once
+
+`interrupt` and `resetSession` both guard themselves with a one-shot flag, and both flags are cleared
+by `startTurn` — new work is a new context, and a stale yes is a yes to something else.
+
+**The interrupt's scope question** fires when more than one thing is outstanding, counting running
+PLUS queued: since admission holds a second request rather than folding it in, "one running, one
+queued" is the same question with the same stakes. A second `interrupt` while the flag is set reads as
+"all of it" and goes straight through. A scoped `running` interrupt skips the question entirely,
+because the user has already answered it — the waiting list is explicitly being kept.
+
+**The reset confirmation** exists because a rotation cannot be undone, and because "forget it", "never
+mind" and "drop that" are almost always about the last thing said while sharing their vocabulary with
+"forget everything we talked about". On a device call a bare "forget it" — about a question Sai had
+just asked — arrived as `resetSession` and cleared the conversation. The prompt says not to do that;
+the prompt is not a guarantee, and there is nothing behind it. So the first call asks and the second
+rotates.
+
+That flag needs one thing `startTurn` cannot give it: a held reset happens with **nothing running**,
+so no turn starts to clear it. A user who answers "no, just drop that" would leave the yes standing
+for the next stray "forget it", minutes and subjects later. So `applyEffects` also clears it after any
+batch that is not another `resetSession` — the user having moved on. Asking again is the safe
+direction; the failure being avoided is a wipe nobody asked for.
+
+Neither question is a `say`. Both are `instruct`, so the model asks in its own words and nothing is
+voiced that describes an action as already taken — see §5.
+
 ## 7. The queue is local, and that is a trade
 
 Held tasks live in this FSM and **nowhere else**. Nothing is written server-side when a task is
@@ -169,6 +199,39 @@ The consequence to hold onto when changing anything here: **`maybeDrainQueue` is
 the world that starts a held task.** So every path that can leave `mode` at `IDLE` has to reach it.
 It runs after each agent event, which covers every way a turn ends today; miss one and a task the
 user was told was coming simply never runs.
+
+## 7b. The conversation outlives the call, and that is a trade
+
+The client does **not** rotate the agent session on its own initiative. A send resolves the server's
+`{uid}_{machineId}_{channel}` pointer to whatever session is already current, and the only thing that
+moves that pointer is the user asking — `resetSession`, on "start fresh". Two consecutive calls are
+one conversation, and one page.
+
+**Why it used to rotate per call.** `VoiceSession` minted a fresh `api` session on its first forward,
+and the hazard it was guarding is real: everything in that transcript is read back as the agent's own
+prior turns on every later call, so one bad turn is not a bad turn — it is a permanent change of
+behaviour. That is not hypothetical. A stubbed reply written during local testing was still being
+imitated by the real agent days later, on a machine doing real work, and fixing the code that wrote
+it did not help, because a code fix does not reach the data.
+
+**Why that no longer justifies it.** What made that episode unescapable was a *second* bug: the one
+command for getting out — "start fresh" — was rotating the terminal's `cli` session instead of this
+client's `api` one, so the user could not rotate away from the poisoned transcript even by asking.
+That is fixed and pinned by a test. Meanwhile the cost of auto-rotation was being paid constantly,
+because **a call ends far more easily than a conversation does**: five quiet minutes trips the idle
+guard, folding or removing the glasses ends it, and the model can decide it heard a goodbye. A chat,
+glasses off for a minute, two more questions, then a machine switch produced four pages in the user's
+sidebar for what they experienced as one conversation.
+
+**What this costs, plainly.** The `api` transcript now grows without bound, and a bad turn persists
+across calls until the user says "start fresh". That is a step backwards on blast radius, accepted
+knowingly. If a long-lived session turns out to degrade the agent measurably, the next move is
+**age-bounded rotation** — not a return to per-call, which trades a rare problem for a constant one.
+
+One part of this is not reachable from here: a **machine switch** still starts a new page, because
+`machineId` is part of the server's session key. That needs a cloud-api change — dropping `machineId`
+from the `api` channel's key, or a `sessionId` parameter on `POST /message` so a client could pin the
+session the `data-session` frame already names.
 
 ## 8. The races that used to be here
 
@@ -241,8 +304,8 @@ changed. Concretely: two forwards both observe an empty `inFlight` before either
 take the immediate path, and the user's restaurant is booked twice.
 
 **Testability.** `Dispatchers.Main` has no implementation in a plain JUnit run, and nothing in this
-suite installs one. An FSM that named it could not be unit-tested at all — and the 59 golden
-scenarios are the only thing that proves this port matches the server's behaviour.
+suite installs one. An FSM that named it could not be unit-tested at all — and the 63 golden
+scenarios are the spec.
 
 The server does the same job with a promise-tail chain. One `Mutex` is the same guarantee.
 
@@ -253,7 +316,7 @@ through the real FSM against fakes, asserting the **effect and state trace**.
 
 It never asserts phrasing. The live model's wording varies, and phrasing quality is the eval's job.
 
-Scenario names match the server's catalog exactly so the two can be reconciled mechanically. If you
+Scenario names are stable so a catalog change is a reviewable diff. If you
 add behaviour, add a scenario; if you change behaviour, a scenario should fail. One that does not is
 either untested or wrong.
 
@@ -275,6 +338,12 @@ Two things worth deciding on rather than inheriting:
 
 - **A held task lost to a dropped call is currently silent.** Saying something on reconnect — even
   just naming what was waiting — would cost little and is the obvious mitigation for §7.
+
+  A *machine switch* used to lose it the same way and is now handled: `applyMachineSwitch` builds a
+  fresh `VoiceSession`, so the queue, the in-flight turn and any pending approval go with the old one,
+  and `close()` discards the stream without aborting — the work keeps running on the machine being
+  left and its result reaches nobody. `LeavingWorkPolicy` asks before that happens, and the hang-up
+  shares it. A dropped call is the case still without an answer, and it is the same shape.
 - **Nothing is heard between turns.** An approval resolved elsewhere while the agent is idle will not
   reach the FSM. If that turns out to matter in practice, a poll of
   `GET /v1/agents/context` at turn boundaries is the cheapest fix that needs no server change.

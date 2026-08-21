@@ -1,16 +1,16 @@
 # On-device check — verifying a build on real hardware
 
-**What this is.** Eight checks, ~25 minutes, each naming what it actually exercises. Two of them
-(the queue and the hang-up) carry extra lettered cases, because those are where the failures cluster.
-Run it after any change that touches the call — and after any server change to the concierge, because
-half of what these checks exercise lives there.
+**What this is.** Ten checks, ~30 minutes, each naming what it actually exercises. Three of them
+(the queue, stopping work, and the hang-up) carry extra lettered cases, because those are where the
+failures cluster.
+Run it after any change that touches the call.
 
-**Why it can't be automated.** The JVM suite (`./gradlew :app:testDebugUnitTest`) and the server's
-vitest suites cover the ports, the state machines and the protocol. None of them exercises the
-persona prompt end to end, the FSM against a real model, the audio path, or the camera path. There is
-no test for "did Sai talk over me", "did Sai stop when I cut in", or "did the photo arrive upright".
+**Why it can't be automated.** The JVM suite (`./gradlew :app:testDebugUnitTest`) covers the ports,
+the state machine and the protocol. None of it exercises the persona prompt end to end, the FSM
+against a real model, the audio path, or the camera path. There is no test for "did Sai talk over
+me", "did Sai stop when I cut in", or "did the photo arrive upright".
 
-**You need:** the glasses, a paired phone, and a reachable cloud-api.
+**You need:** the glasses, a paired phone, and a reachable Sai API.
 
 ---
 
@@ -18,43 +18,34 @@ no test for "did Sai talk over me", "did Sai stop when I cut in", or "did the ph
 
 ### The server
 
-The app talks to whatever `concierge_url` in `local.properties` points at — the shared staging
-gateway by default, or a laptop on the same LAN if you are testing unmerged server work. Either way,
-confirm it is up and serving the concierge routes before you touch the glasses:
+The app talks to whatever `sai_api_url` in `local.properties` points at — production
+(`https://api.sai.simular.ai`) by default, or a laptop on the same LAN if you are testing unmerged
+server work. Confirm it is up before you touch the glasses:
 
 ```bash
-CONCIERGE_URL=$(grep '^concierge_url=' meta-android-app/local.properties | cut -d= -f2-)
-curl -s "$CONCIERGE_URL/health"                                              # → {"status":"ok",…}
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "$CONCIERGE_URL/v1/agents/message"
+SAI_API_URL=$(grep '^sai_api_url=' meta-android-app/local.properties | cut -d= -f2-)
+# empty sai_api_url → the Gradle default, production
+SAI_API_URL="${SAI_API_URL:-https://api.sai.simular.ai}"
+curl -s "$SAI_API_URL/health"                                              # → {"status":"ok",…}
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "$SAI_API_URL/v1/agents/message"
 #   401 → the agent API is there (unauthenticated, as expected)
-#   404 → you are pointed at something that is not cloud-api
+#   404 → you are pointed at something that is not the Sai API
 ```
 
 > **The voice half does not touch this server.** Audio goes straight from the phone to Google with
-> your own key, and the prompt ships in the APK. What `concierge_url` reaches is your AGENT — so a
+> your own key, and the prompt ships in the APK. What `sai_api_url` reaches is your AGENT — so a
 > server that is down means tasks fail, not that Sai stops talking. That distinction is worth holding
 > while you read the checks below.
 
-If you are testing a server branch, **start cloud-api from that branch** or you are testing something
-else, and confirm the process you are hitting is the one you just started:
+Every run here wakes a real VM and bills a real agent. Prefer the off-device tiers for anything that
+does not actually need the glasses: the JVM suite closes the model → FSM → agent loop against a
+scripted agent (`app/src/test/…/conversation/`), which covers the queue and the protocol half of
+barge-in for free. What is left for this checklist is what only hardware can answer — the audio
+path, the camera, and how it all feels.
 
-```bash
-lsof -nP -iTCP:8080 -sTCP:LISTEN
-ps -o lstart=,command= -p <pid> | cut -c1-80
-```
-
-> **There is no longer a way to run these against a stood-in agent.** `SAI_AGENT_SANDBOX` was
-> reverted and no longer exists in cloud-api, so every run here wakes a real VM and bills a real
-> agent. Budget for that, and prefer the off-device tiers for anything that does not actually need
-> the glasses: the JVM suite now closes the model → FSM → agent loop against a scripted agent
-> (`app/src/test/…/conversation/`), which covers the queue and the protocol half of barge-in for
-> free. What is left for this checklist is what only hardware can answer — the audio path, the
-> camera, and how it all feels.
-
-> **`sai_version_tag` only means something against staging.** It pins the app to one server revision
-> via the `x-sai-version` header. Pointed at a local server it is inert — `/health` reports
-> `versionTag: default` — so blank it rather than wonder. Pointed at staging, set it to the revision
-> you actually want to test, and check 1 below is what confirms it took.
+> **`sai_version_tag` is optional.** It pins the app to one server revision via the `x-sai-version`
+> header. Pointed at a host that does not honour it, the header is inert — blank it rather than
+> wonder. Check 1 below is what confirms a pin took.
 
 ### The app
 
@@ -95,23 +86,12 @@ streams to a browser. DEBUG builds only, LAN only.
 
 ---
 
-> **First run after the 2026-08-12 change?** These five paths moved repositories and have never run
-> on hardware. If something is going to be broken, it is one of them:
->
-> | | What to watch |
-> | --- | --- |
-> | The turn stream connects | `POST /v1/agents/message` answers with the turn's events. If that response is not read, nothing arrives from the agent at all — checks 2, 3 and 6 all go quiet together |
-> | Live opens with `?key=` | The URL form changed. The wrong one closes with `1007 api key not valid` |
-> | An idle call ends itself | The cost guard moved from the server to the phone. Leave a call silent for five minutes; it should hang up and say why |
-> | Waking a machine | The "it's waking / it's ready" lines now travel as `notice` over the stream |
-> | Cancelling a queued task | Four endpoints deep, and the race answers are new — check 6 covers it |
+## 1. The ten checks
 
-## 1. The eight checks
-
-Each names **what it actually exercises** — that is the point of running these specific eight rather
+Each names **what it actually exercises** — that is the point of running these specific ten rather
 than "have a chat with it". Kotlin names (`GreetingGate`, `HangupPolicy`, `CallService`) are in this
-repo; a bare `.ts` filename means the server's half of the same thing, and what the client owes it
-either way is [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md).
+repo. What the client owes the Sai API is
+[`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md).
 
 ### 1. Greeting
 
@@ -119,7 +99,7 @@ Start a call and say nothing.
 
 - **Expect:** Sai speaks first, within a couple of seconds, without waiting for you.
 - **Exercises:** `GREETING_NUDGE` and the greeting gate. The nudge text lives in
-  `contract/nudges.ts` and is fixture-pinned on both sides; the gate is Kotlin's `GreetingGate`. If
+  `ConciergeProtocol.kt` and is fixture-pinned; the gate is `GreetingGate`. If
   Sai waits silently, the nudge is not reaching the model.
 
 ### 2. A forwarded task
@@ -127,8 +107,8 @@ Start a call and say nothing.
 > "Can you check what's in my downloads folder?"
 
 - **Expect:** one short acknowledgement, then **silence** while it runs, then the result spoken once.
-- **Exercises:** the whole spine — `InProcessAgentBridge` → `routeInboundMessage` on the `voice`
-  channel → `streamResponse` → `mapSseEvent` → the FSM. Also the "acknowledge once, then go quiet"
+- **Exercises:** the whole spine — `HttpAgentBridge` → `POST /v1/agents/message` → the turn's SSE
+  stream → the FSM. Also the "acknowledge once, then go quiet"
   rule: **periodic "still working" updates are a failure**, and the dead-air watchdog that used to
   cause them was deleted outright — there is nothing left that should fill a quiet stretch.
 - **Watch for:** progress lines in the log but not in your ear.
@@ -140,7 +120,7 @@ Ask for something that needs one — e.g. deleting a file, or anything the agent
 > "Delete that draft file for me"
 
 - **Expect:** Sai reads the request out and waits. Say "yes" → it proceeds.
-- **Exercises:** `effect-handlers/approvals.ts`, and the `agent-ingest.ts` extraction that sets
+- **Exercises:** `ApprovalHandlers.kt`, and the `AgentIngest` extraction that sets
   `awaiting: 'approval'`. This is the path where a bug parks the FSM forever, so also check that
   **after** the approval resolves Sai goes back to idle and will take a new task.
 
@@ -150,8 +130,8 @@ Ask for something that needs one — e.g. deleting a file, or anything the agent
 
 - **Expect:** the capture happens on the **glasses** camera, and Sai does not claim to have *sent*
   anything until it is attached to a task.
-- **Exercises:** `GlassesCamera`, `PhotoClipboard`'s state in `CallService`, the WS `attachment`
-  message, and `isAcceptableAttachment` in `attach-ws`. The persona prompt has a paragraph on
+- **Exercises:** `GlassesCamera`, the photo stash in `HttpAgentBridge` / `CallService`, and
+  attaching the upload to the next forward. The persona prompt has a paragraph on
   photo-taken ≠ photo-sent, found by hearing it fail.
 - **Watch for:** "I've sent that over" when nothing was forwarded.
 
@@ -204,8 +184,8 @@ checks and not FSM tests.
 
 - **Expect:** Sai confirms it is dropped, it **never runs**, and a follow-up "what's queued?" no
   longer mentions it.
-- **Exercises:** the `cancelQueued` effect and the server replacing its `session-state` projection
-  wholesale. Two distinct failures: `→ effect: cancelQueued` **absent** from logcat means Sai said
+- **Exercises:** the `cancelQueued` effect and the local queue projection updating.
+  Two distinct failures: `→ effect: cancelQueued` **absent** from logcat means Sai said
   yes and never called the tool — the booking will still run; present but still listed afterwards
   means the projection did not update.
 
@@ -221,7 +201,7 @@ checks and not FSM tests.
 **6e — two deep.** Queue a second and a third behind the running task.
 
 - **Expect:** both wait, they run **in the order you asked for them**, and every result reaches you.
-- **Exercises:** FIFO admission server-side, and the client's nudge gating when the second completion
+- **Exercises:** FIFO admission in the local queue, and the client's nudge gating when the second completion
   lands while Sai is still reporting the first — `→ nudge: complete — held until the turn ends`
   followed by `← nudge: delivering complete`. Two results reported in one breath is fine; a result
   you never hear at all is the failure, and `✗ nudge: dropping …` names it.
@@ -255,31 +235,116 @@ mid-sentence.
 - **Then barge in while a task is running**, and let its completion land. Cutting Sai off must not
   cost you the result: it should still arrive after the exchange.
 
-### 8. endCall
+### 8. Switching machines
 
-**8a — with work still outstanding.** Do this one *before* letting the queue drain — if check 6's tasks
+Mid-call, with more than one machine on the account:
+
+> "Switch to my ⟨other machine⟩"
+
+- **Expect:** a spoken "Switched to ⟨label⟩." and nothing more — then the **next** task runs on that
+  machine, and `recallHistory` stops reaching the old one. Live audio stays up, so the conversation
+  survives the switch.
+- **Exercises:** the `switchMachine` device tool, `MachineSwitcher.resolve` (exact, then containment
+  either way — so "studio" finds "Studio Mac"), and `applyMachineSwitch`'s reconnect. `switched
+  machine → ⟨label⟩` in logcat is the proof something was repointed; without it the next task still
+  goes to the old machine.
+- **Watch for:** the reply's parenthetical read aloud. "Context update, not to be spoken aloud" in
+  your ear is `RESELECT_NUDGE`'s failure in a new place. Switching from the **phone picker** instead
+  must be silent — a button press carries no tool response, so the correction goes in as a nudge, and
+  Sai narrating what you just pressed is the failure.
+- **Switch with a task still running** and Sai must **ask first** — naming the task, saying it keeps
+  going on the machine you are leaving and that this call will not hear the result, and offering to
+  stop it. Answer either way and the switch then goes through; the question is one-shot, like
+  `interrupt`'s scope question. This is `LeavingWorkPolicy`, shared with the hang-up in check 10a, and
+  it exists because `applyMachineSwitch` builds a fresh `VoiceSession`: before it, a switch silently
+  discarded the queue, the running turn and any pending approval — work Sai had promised out loud. From
+  the **picker** there is no question to ask (a tap is not a conversation), so it switches and then says
+  what was left behind.
+- **Switch onto a hibernated machine** and it should wake, announced: "Switched to ⟨label⟩", then
+  `MACHINE_WAKING` verbatim, then `MACHINE_AWAKE` on its own a minute or so later — all before you ask
+  for anything. Both switch paths go through `applyMachineSwitch`, so the picker behaves the same.
+  **The wake must stay silent when `canWake` is false** (a machine no provider can wake): that one is
+  not coming back, and the line promises a minute. `WakePolicy` decides all of this and is JVM-tested;
+  what the device is answering is whether the model reads a verbatim line as one, and whether
+  "waking" and "awake now" ever arrive in the same breath — they share a nudge kind precisely so the
+  later replaces the earlier, and hearing both is the failure.
+
+### 9. Stopping work
+
+The other half of the queue: check 6 is about work that waits, this is about work that dies.
+
+**9a — stop one thing.** Start a long task. While it runs:
+
+> "Actually, stop that"
+
+- **Expect:** it stops, Sai says so plainly, and — the part that matters — it does **not** describe the
+  stopped task as finished. "That's done" about work that was killed is the failure.
+- **Exercises:** `interrupt` → `applyInterrupt` → `POST abort`. Watch for `→ effect: interrupt` and then
+  `[voice] stopped following the turn — it was aborted`. No agent event follows, *because* of that line:
+  the abort stops this device reading the turn, so the handler has to close the turn out itself. If it
+  doesn't, everything you ask afterwards queues behind a turn that will never end — so follow up with a
+  fresh, quick task and check it runs.
+- **Also watch for what must NOT appear:** any `•` progress line, a `✓ done:`, or a `→ nudge: complete`
+  after the stop. On 2026-08-20 all three did — nothing tore the reader down, the cancelled task was
+  read to its natural end, and Sai reported its result to a user who had just stopped it. If you see
+  `[voice] dropped … from an abandoned turn` instead, that is the guard working.
+
+**9b — stop everything, from two.** Start a long task, queue a second behind it (check 6a), then:
+
+> "Stop"
+
+- **Expect:** with two things outstanding "stop" is ambiguous, so Sai **asks which** rather than
+  guessing. Answer "all of it" → both go, and a follow-up "what's queued?" reports nothing waiting.
+- **Exercises:** the one-shot scope question in `applyInterrupt` — the first interrupt asks, the second
+  goes straight through. Guessing silently is the failure this exists to prevent, and it stops the wrong
+  task in half of all cases.
+
+**9c — start fresh.** With **nothing** outstanding:
+
+> "Let's start fresh"
+
+- **Expect:** Sai confirms a clean slate, and a `recallHistory` question afterwards no longer reaches
+  the old conversation.
+- **Exercises:** `resetSession` → `POST new-session`. Then repeat it **with a task running**:
+  **expect a refusal that names what is in the way**, not a rotation — rotating out from under live work
+  orphans it. This path is worth the attention: its last bug rotated the *terminal's* conversation
+  instead of this one, which no off-device test could see.
+
+**9d — two calls, one page.** With the desktop app's sidebar visible: make a call, ask for anything
+that reaches the agent, hang up. Start a second call and ask for something else.
+
+- **Expect:** **one** conversation page total, with both calls' work in it — not a new page per call.
+  Then say "start fresh" and expect a second page to appear, since that one is asked for.
+- **Exercises:** the absence of a per-call mint (`VOICE_FSM.md` §7b). Nothing off-device can see this
+  — `VoiceSession` has no unit test and the harness fakes reimplement the transport — and the symptom
+  is only visible in the sidebar, which is why it went unnoticed. Note that a **machine switch** still
+  starts a new page and that is expected: `machineId` is in the server's session key.
+
+### 10. endCall
+
+**10a — with work still outstanding.** Do this one *before* letting the queue drain — if check 6's tasks
 have all finished by now, start one long one and say goodbye straight over it:
 
 > "Thanks, that's everything — bye"
 
 - **Expect:** Sai asks about the outstanding work before hanging up — keep it running, or stop it —
   rather than ending on it silently. Answer either way and the call should then end.
-- **Exercises:** the persona contract's hang-up-vs-work rule, decided server-side, against the same
-  `session-state` picture check 6b reads. Hanging up with a queued task unmentioned is the failure.
+- **Exercises:** `LeavingWorkPolicy`, shared with the machine switch, against the same
+  queue picture check 6b reads. Hanging up with a queued task unmentioned is the failure.
 
-**8b — the plain goodbye.** Once nothing is outstanding, say it again.
+**10b — the plain goodbye.** Once nothing is outstanding, say it again.
 
 - **Expect:** Sai says goodbye, *then* the call ends a beat later — not the other way round, and not
   both at once.
 
-**8c — the guard.** Start a fresh call, and with Sai never having spoken, say something that sounds
+**10c — the guard.** Start a fresh call, and with Sai never having spoken, say something that sounds
 like a farewell aimed at someone else ("yeah, bye!" as if to another person).
 
 - **Expect:** Sai does **not** hang up — it asks "did you want me to hang up?"
 - **Exercises:** `HangupPolicy` (covered by JVM tests, but only the decision — not the audio). The
   failure mode is cutting you off mid-sentence with another human.
 
-**8d — talking over the goodbye.** Cut in during the goodbye window.
+**10d — talking over the goodbye.** Cut in during the goodbye window.
 
 - **Expect:** the hangup aborts and Sai carries on, without saying goodbye a second time. Two triggers
   reach this — the barge-in itself and fresh speech after the goodbye finished playing — so also try
@@ -290,7 +355,7 @@ like a farewell aimed at someone else ("yeah, bye!" as if to another person).
 
 ## 2. Recording the result
 
-Write down, for each of the eight — and separately for each lettered case under 6 and 8 —
+Write down, for each of the ten — and separately for each lettered case under 6, 9 and 10 —
 **pass / fail / not-reached**, and for any failure, the log excerpt and what you actually heard. "Not
 reached" is a real result and worth recording; it usually means an earlier check left the session in a
 state the later one could not be provoked from, which is itself worth knowing. The queue cases in
@@ -298,30 +363,29 @@ particular chain: 6c and 6d have nothing to act on if 6a never queued anything, 
 not-reached rather than as passes.
 
 **A failure here is not automatically a regression.** Several of these behaviours have never been
-perfect, and the model is a noisy instrument — the behavioral eval on the server side routinely fails
-rows on model capability rather than on the prompt. What makes a failure a regression is it being
+perfect, and the model is a noisy instrument — the judged eval routinely fails rows on model
+capability rather than on the prompt. What makes a failure a regression is it being
 **new**: compare against the last build you ran this on before concluding anything.
 
 If you are running this to gate a change, attach the results to that change's PR. A by-ear failure
-worth keeping should become an executable spec rather than a memory — the server's golden catalog
-(`core/golden/scenarios.ts`) exists so that every behaviour once fixed by ear has a test watching it.
+worth keeping should become an executable spec rather than a memory — `FsmGoldenTest` exists so that
+every behaviour once fixed by ear has a test watching it.
 
 ## 3. If something goes wrong
 
 | Symptom | Likely cause |
 | --- | --- |
-| No session at all, app shows an error | Server not running, or `concierge_url` unreachable **from the phone** — check the network path, not the code. A LAN address that resolves on your laptop need not resolve on the handset |
-| `401` on session mint | Signed out, or the Firebase ID token expired. Sign out and back in |
+| No session at all, app shows an error | Sai API unreachable **from the phone**, or `sai_api_url` empty (`no sai_api_url` in the log). A LAN address that resolves on your laptop need not resolve on the handset |
+| `401` on a Sai API call | Signed out, or the Firebase ID token expired. Sign out and back in |
 | Glasses never connect | DAT registration lapsed, or another DAT app claimed the single registration slot |
+| Capture denied, and no **Grant glasses camera** button anywhere | Meta AI can grant the camera *once*, and a pending glasses firmware update can withdraw it until the update finishes. The app used to cache the first grant forever, which hid the one control that fixes it — fixed 2026-08-20, so the button now returns when DAT affirmatively reports the permission gone. Greyed out means the glasses aren't linked: Meta AI cannot grant for a device it cannot see. Settings → Troubleshooting says the same in the app |
 | Audio one-way | The classic one. Check `SaiFi:Audio` in logcat for the route it picked |
 | Sai talks through a barge-in, or stops late | `— barge-in —` in the log means the VAD fired and the playback side is at fault (flush, or straggler audio past the discard window). No such line means it never fired — mic route or noise gate |
 | Sai cuts itself off with nobody speaking | AEC: Sai's own playback is reaching the mic. Repeat on the phone route with wired headphones to confirm before touching anything |
 | Sai calls a queued task "underway" | No `session-state` reached the client (nothing like `⋯ 1 waiting:` in the activity log), so `getSaiStatus` is answering from the rolling buffer alone |
 | Sai agrees to cancel or reorder, and nothing changes | No `→ effect: cancelQueued` / `sendQueuedNow` in logcat — Sai never called the tool. A prompt or tool-declaration problem, not a queue bug |
-| Sai narrates every step | The update-discipline prompt block is not reaching it — inspect the prompt in the `POST /session` response, or dump it in the server repo with `npm run -w cloud-api prompt:dump glasses` |
+| Sai narrates every step | The update-discipline prompt block is not reaching it — inspect `assets/voice-profile.json` |
 | Nothing in the presenter | DEBUG build? `presenter_url` set? Same LAN? It is best-effort and never blocks a call |
 
-**Going further.** This is the short gate — run it for a change. The cumulative by-ear matrix (60-odd
-rows, one per bug ever found on a device) and the demo runbook with its on-stage recovery notes live
-with the server's test docs and are **not mirrored here**; ask for them before a release or a stage
-rehearsal, because these eight checks are not a substitute for either.
+**Going further.** This is the short gate — run it for a change. The spoken script that turns these
+ten checks into three calls is [`ON_DEVICE_DEMO_FLOW.md`](ON_DEVICE_DEMO_FLOW.md).
