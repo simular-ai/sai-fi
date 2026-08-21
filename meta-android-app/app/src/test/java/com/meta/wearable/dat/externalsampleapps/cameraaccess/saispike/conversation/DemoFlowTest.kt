@@ -3,7 +3,7 @@
 // The demo flow: ONE call, the real model, a real agent, mirrored to the presenter.
 //
 //   SAI_DEMO=1 SAI_PRESENTER=1 GEMINI_API_KEY=… \
-//   SAI_CONCIERGE_URL=… SAI_MACHINE_ID=… SAI_ID_TOKEN=… \
+//   SAI_API_URL=… SAI_MACHINE_ID=… SAI_ID_TOKEN=… \
 //     ./gradlew :app:testDebugUnitTest --tests "*DemoFlowTest*" --rerun
 //
 // Everything is real except the microphone and the camera: the model is Gemini running the prompt

@@ -5,15 +5,14 @@
 // ConciergeClient — the read-only half of the agent API: machines, history, and image upload.
 //
 // Named for an endpoint that no longer exists. What it holds now is everything a call needs from
-// cloud-api that is NOT a task: `GET /v1/agents/machines` for the picker, `GET /v1/agents/context`
+// the Sai API that is NOT a task: `GET /v1/agents/machines` for the picker, `GET /v1/agents/context`
 // behind `recallHistory`, and `POST /v1/agents/upload` for a glasses capture. Sending work is
 // VoiceChannelClient's job.
 //
-// Auth = a fresh Firebase ID token (from SaiAuth) sent as a Bearer header — cloud-api's
-// authMiddleware verifies it per-user, exactly as for the web/desktop app (never put the token in a
-// URL; no compiled-in `sapi_` key). Point CONCIERGE_URL at the cloud-api base (staging by default);
-// no `adb reverse` needed — it's a real HTTPS endpoint. HttpURLConnection keeps this client
-// dependency-free.
+// Auth = a fresh Firebase ID token (from SaiAuth) sent as a Bearer header — the Sai API verifies
+// it per-user, exactly as for the web/desktop app (never put the token in a URL; no compiled-in
+// `sapi_` key). SAI_API_URL defaults to production; no `adb reverse` needed. HttpURLConnection
+// keeps this client dependency-free.
 //
 // Non-2xx responses throw [ConciergeHttpException] carrying the status so callers can distinguish
 // permanent failures — 402 (out of credits), 503 (voice disabled / not configured), 401 (bad token),
@@ -54,11 +53,60 @@ data class SessionBootstrap(
 )
 
 /** A Sai machine (VM) the user can target, from GET /v1/agents/machines. */
-data class Machine(val machineId: String, val name: String?) {
+data class Machine(
+    val machineId: String,
+    val name: String?,
+    /**
+     * VM state as the server stores it: `active` · `hibernated` · `hibernating` · `wakingup`, or null
+     * when the machine has never reported one — read that as offline.
+     *
+     * Only [isActive] is read at present, by the wake watcher. Deliberately kept as the server's own
+     * string rather than an enum: a second spelling of these states is how the two drift apart, and
+     * an unknown value must degrade to "not active" rather than fail to parse.
+     */
+    val status: String? = null,
+    /**
+     * Whether a hibernated machine can be woken remotely at all — a property of where it is hosted,
+     * not of what it is doing now.
+     *
+     * The reason this is not inferable from [status]: a `hibernated` machine with `canWake = false` is
+     * asleep and staying that way, so announcing a wake for it promises a minute that never ends.
+     */
+    val canWake: Boolean = false,
+) {
   /** Display label for the picker. */
   val label: String
     get() = name?.takeIf { it.isNotBlank() } ?: machineId
+
+  /** Up and usable. Anything else — including an unrecognised state — is not. */
+  val isActive: Boolean
+    get() = status == "active"
 }
+
+/**
+ * What `POST /v1/agents/wake` answered.
+ *
+ * Four fields because the caller has four different sentences to choose between, and only one of them
+ * is true at a time. See [ConciergeClient.wakeMachine].
+ */
+data class WakeOutcome(
+    /**
+     * THIS call dispatched a wake. False for a machine that was already awake, already on its way, or
+     * cannot be woken — and false is not the same as "nothing to say" in the second case.
+     */
+    val waking: Boolean,
+    /**
+     * The machine is not usable yet but is coming up, whether or not we are the reason.
+     *
+     * **Branch on this, not [waking].** A machine already mid-wake answers `waking = false` — correctly,
+     * since nothing was dispatched — and the user is still owed the "about a minute" line. It is also
+     * false for a hibernated machine that cannot be woken, which is exactly when nothing should be said.
+     */
+    val startingUp: Boolean,
+    /** As stored, read server-side BEFORE the dispatch. Null when the field is absent. */
+    val status: String?,
+    val canWake: Boolean,
+)
 
 object ConciergeClient {
   /**
@@ -84,7 +132,14 @@ object ConciergeClient {
         val arr = JSONObject(body).optJSONArray("machines") ?: return@withContext emptyList()
         (0 until arr.length()).map {
           val m = arr.getJSONObject(it)
-          Machine(m.getString("machineId"), m.optString("name").ifEmpty { null })
+          Machine(
+              machineId = m.getString("machineId"),
+              name = m.optString("name").ifEmpty { null },
+              // Absent on a server older than 2026-08-20, which reads as "offline / cannot wake" —
+              // and the wake path degrades to doing nothing rather than to guessing.
+              status = m.optString("status").ifEmpty { null },
+              canWake = m.optBoolean("canWake", false),
+          )
         }
       }
 
@@ -170,5 +225,52 @@ object ConciergeClient {
           throw ConciergeHttpException(code, "POST /v1/agents/upload failed: HTTP $code — ${body.take(300)}")
         }
         JSONObject(body)
+      }
+
+  /**
+   * Wake a hibernated machine, without sending it any work — `POST /v1/agents/wake`.
+   *
+   * The point of it having no payload: every other wake in the system rides a delivery, and a message
+   * arriving during a running turn is folded INTO that turn. So waking by sending a throwaway "hello"
+   * means the dummy and the user's next real request share one turn, and the dummy's completion ends
+   * it out from under the real work. There is nothing to deliver at call bind anyway.
+   *
+   * Safe to call redundantly — the server no-ops on a machine that is already awake. Throws
+   * [ConciergeHttpException] on a non-2xx; a 404 means the machine is not this account's.
+   */
+  suspend fun wakeMachine(
+      baseUrl: String,
+      bearerToken: String,
+      machineId: String,
+  ): WakeOutcome =
+      withContext(Dispatchers.IO) {
+        val conn =
+            (URL("$baseUrl/v1/agents/wake").openConnection() as HttpURLConnection).apply {
+              requestMethod = "POST"
+              doOutput = true
+              connectTimeout = 10_000
+              readTimeout = 15_000
+              applyCloudApiHeaders(bearerToken)
+              setRequestProperty("Content-Type", "application/json")
+            }
+        conn.outputStream.use {
+          it.write(JSONObject().put("machineId", machineId).toString().toByteArray())
+        }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        conn.disconnect()
+        if (code !in 200..299) {
+          throw ConciergeHttpException(code, "POST /v1/agents/wake failed: HTTP $code — ${body.take(300)}")
+        }
+        val o = JSONObject(body)
+        WakeOutcome(
+            waking = o.optBoolean("waking", false),
+            // Absent on an older server: nothing is starting up as far as this client can tell, so the
+            // wake path stays silent rather than announcing a minute it cannot vouch for.
+            startingUp = o.optBoolean("startingUp", false),
+            status = o.optString("status").ifEmpty { null },
+            canWake = o.optBoolean("canWake", false),
+        )
       }
 }

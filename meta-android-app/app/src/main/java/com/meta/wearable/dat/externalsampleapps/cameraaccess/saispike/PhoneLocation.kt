@@ -39,7 +39,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONObject
 
 /**
  * One fix, in the shape the server's `TaskLocation` expects.
@@ -60,17 +59,7 @@ class Place(
     val label: String?,
     val approximate: Boolean,
     val capturedAt: Long,
-) {
-  fun toJson(): JSONObject =
-      JSONObject().apply {
-        put("lat", lat)
-        put("lon", lon)
-        accuracyM?.let { put("accuracyM", it.toDouble()) }
-        label?.let { put("label", it) }
-        if (approximate) put("approximate", true)
-        put("capturedAt", capturedAt)
-      }
-}
+)
 
 object PhoneLocation {
   // How long to wait on a fresh fix before falling back to the last known one. The user is mid-

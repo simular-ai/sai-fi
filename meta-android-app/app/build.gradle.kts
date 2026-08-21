@@ -16,7 +16,7 @@ plugins {
 }
 
 // local.properties (gitignored) — holds the SDK dir, GitHub token, the voice-concierge config
-// (concierge_url, optional sai_version_tag), and the Firebase sign-in config (firebase_app_id,
+// (sai_api_url, optional sai_version_tag), and the Firebase sign-in config (firebase_app_id,
 // firebase_api_key, firebase_project_id, web_client_id). Never commit these values.
 val localProperties =
     Properties().apply {
@@ -32,12 +32,23 @@ android {
 
   buildFeatures { buildConfig = true }
 
+  /**
+   * The shipped voice profile, on the unit-test classpath.
+   *
+   * `VoiceProfileTest` used to grade a COPY of it vendored under `test/resources/parity/`, which is
+   * exactly how it went stale: the copy still declared `approveAlways` and told the model to offer
+   * "always allow" months after the product retired both, and the test that exists to catch a
+   * dropped prompt block was reading a file nothing ships. A test about the shipped artefact reads
+   * the shipped artefact.
+   */
+  sourceSets { getByName("test") { resources.srcDir("src/main/assets") } }
+
   defaultConfig {
     applicationId = "ai.simular.saiglasses"
     minSdk = 31
     targetSdk = 36
     versionCode = 1
-    versionName = "1.0"
+    versionName = "0.1.0"
 
     // Meta Wearables Device Access Toolkit registration, from local.properties. The client token is a
     // CREDENTIAL and this app is open-source, so it is never committed — it used to be hardcoded in
@@ -54,30 +65,29 @@ android {
     // because the key travels with the binary. Empty = voice cannot start, and the app says so.
     buildConfigField(
         "String", "GEMINI_API_KEY", "\"${localProperties.getProperty("gemini_api_key", "")}\"")
-    // Voice-concierge config, from local.properties. concierge_url is the cloud-api base; the shared
-    // staging gateway (https://staging.cloud-api.simular.cloud) is the default. The app hits
-    // /v1/voice/* over HTTPS — that reaches the AGENT; the voice conversation itself needs nothing
-    // from it.
+    // Sai API base, from local.properties. Production is the default. An empty value (sai_api_url=
+    // with nothing after the equals) compiles, then fails at runtime with `no sai_api_url` rather
+    // than a mysterious network error. This reaches the AGENT; the voice conversation itself needs
+    // nothing from it.
     buildConfigField(
         "String",
-        "CONCIERGE_URL",
-        "\"${localProperties.getProperty("concierge_url", "https://staging.cloud-api.simular.cloud")}\"",
+        "SAI_API_URL",
+        "\"${localProperties.getProperty("sai_api_url", "https://api.sai.simular.ai")}\"",
     )
-    // To test a specific PR's staging revision, set sai_version_tag to the PR's version tag; the app
-    // sends it as the `x-sai-version` header on every cloud-api call so the staging gateway routes to
-    // that revision. Empty = the shared staging default.
+    // Optional. Sent as `x-sai-version` on every Sai API call so a gateway can route to one server
+    // revision. Empty = whatever that host serves by default. Inert against a host that does not
+    // honour the header.
     buildConfigField("String", "SAI_VERSION_TAG", "\"${localProperties.getProperty("sai_version_tag", "")}\"")
     // Presenter feed (DEBUG builds only — see CallService): the phone publishes the live call (audio,
     // conversation text, logs, glasses photos) to a laptop dashboard so an audience can hear and read
     // it, since Sai's replies otherwise only reach the wearer's glasses speaker. Run the server with
     // `cd presenter && npm run presenter`; it prints the exact values to paste here. Leave
-    // presenter_url empty and it is derived from concierge_url's host when that host is a LAN/dev
-    // address, so pointing the app at your laptop is enough. Empty + non-local concierge_url = off.
+    // presenter_url empty and it is derived from sai_api_url's host when that host is a LAN/dev
+    // address, so pointing the app at your laptop is enough. Empty + non-local sai_api_url = off.
     buildConfigField("String", "PRESENTER_URL", "\"${localProperties.getProperty("presenter_url", "")}\"")
     buildConfigField("String", "PRESENTER_KEY", "\"${localProperties.getProperty("presenter_key", "")}\"")
-    // Firebase config for in-app Google Sign-In (from local.properties — the values from the simular
-    // Firebase project's Android app + web OAuth client). Sign-in yields a Firebase ID token the app
-    // sends as the Bearer to cloud-api (authMiddleware verifies it) — no compiled-in credential. Empty
+    // Firebase config for in-app Google Sign-In (from local.properties). Sign-in yields a Firebase
+    // ID token the app sends as the Bearer to the Sai API — no compiled-in credential. Empty
     // defaults compile fine; sign-in just won't work until they're set.
     buildConfigField("String", "FIREBASE_APP_ID", "\"${localProperties.getProperty("firebase_app_id", "")}\"")
     buildConfigField("String", "FIREBASE_API_KEY", "\"${localProperties.getProperty("firebase_api_key", "")}\"")
@@ -173,18 +183,23 @@ dependencies {
 /**
  * Let the behavioural eval see its environment.
  *
- * `ConciergeEvalTest` is opt-in and costs model quota, so it reads `SAI_CONVERSATION_EVAL` and a key
- * from the environment and skips itself without them. Forwarded EXPLICITLY rather than left to the
+ * The judged tiers are opt-in and cost model quota, so each reads its own switch and a key from the
+ * environment and skips itself without them: `LoopEvalTest` on `SAI_CONVERSATION_EVAL`,
+ * `TranscriptEvalTest` on `SAI_TRANSCRIPT_EVAL`. Forwarded EXPLICITLY rather than left to the
  * Gradle daemon's inherited environment: a daemon started before you exported the variables carries
  * the old ones, so the eval reports "skipped" with nothing on screen to say why — which reads as a
  * broken test rather than a switch that is off.
  *
  *   SAI_CONVERSATION_EVAL=1 GEMINI_API_KEY=… \
- *     ./gradlew :app:testDebugUnitTest --tests "*ConciergeEvalTest*"
+ *     ./gradlew :app:testDebugUnitTest --tests "*LoopEvalTest*"
  */
 tasks.withType<Test>().configureEach {
   listOf(
           "SAI_CONVERSATION_EVAL",
+          "SAI_TRANSCRIPT_EVAL",
+          // Rewriting the golden fixtures. Off in CI, and that is the point: a golden set that
+          // regenerates itself on every run cannot detect drift. See RegenerateGoldensTest.
+          "SAI_REGEN_GOLDENS",
           "GEMINI_API_KEY",
           "GOOGLE_API_KEY",
           "EVAL_MODEL",
@@ -193,7 +208,7 @@ tasks.withType<Test>().configureEach {
           "EVAL_PRINT",
           // The live-agent contract tier, which talks to a real cloud-api and bills a real agent.
           "SAI_LIVE_AGENT",
-          "SAI_CONCIERGE_URL",
+          "SAI_API_URL",
           "SAI_MACHINE_ID",
           "SAI_ID_TOKEN",
           // Mirroring a harness conversation to the presenter, so a test can be watched.
@@ -204,11 +219,11 @@ tasks.withType<Test>().configureEach {
       )
       .forEach { name -> System.getenv(name)?.let { environment(name, it) } }
   // The eval's output IS its result — a scorecard, not an assertion count — so it has to reach the
-  // terminal. Only while it is running: on the ordinary suite this would bury 285 tests in noise.
+  // terminal. Only while it is running: on the ordinary suite this would bury the JVM tests in noise.
   // (A full run makes dozens of model calls and waits out per-minute rate limits between them, so it
   // takes minutes. Gradle sets no default test timeout, so there is nothing to raise.)
-  if (System.getenv("SAI_CONVERSATION_EVAL") == "1" || System.getenv("SAI_PRESENTER") == "1" ||
-      System.getenv("SAI_DEMO") == "1") {
+  if (System.getenv("SAI_CONVERSATION_EVAL") == "1" || System.getenv("SAI_TRANSCRIPT_EVAL") == "1" ||
+      System.getenv("SAI_PRESENTER") == "1" || System.getenv("SAI_DEMO") == "1") {
     testLogging { showStandardStreams = true }
   }
 }

@@ -27,6 +27,15 @@ class ActivityLog(
   // whatever is still in the scrollback.
   private var queued: List<String> = emptyList()
   private var blockedOn: String? = null
+  // The last finished task's outcome, held as STATE for exactly the reason `queued` is: the buffer
+  // rolls, and this is the one line in it that has to survive.
+  //
+  // `getSaiStatus` is what the ask-first nudge sends the model back to when it is holding a result
+  // and the user finally asks — and the result reached that nudge as a `complete` line in the
+  // scrollback, twelve entries from being dropped. Any task that runs afterwards pushes it out, so
+  // the answer to "how did that go?" was a buffer full of the NEXT task's progress and no trace of
+  // the one being asked about. A model with nothing to find says the task stopped.
+  private var lastOutcome: String? = null
 
   fun record(event: JSONObject) {
     track(event)
@@ -40,6 +49,7 @@ class ActivityLog(
     steps = 0
     queued = emptyList()
     blockedOn = null
+    lastOutcome = null
   }
 
   /**
@@ -68,6 +78,18 @@ class ActivityLog(
               "Still working — $steps step(s) done so far. You have no estimate of how much longer; " +
                   "don't invent one."
           else "Finished after $steps step(s).",
+      )
+    }
+    // Attributed, not just repeated. Once another task is running, the same words describe something
+    // the user is no longer asking about, and an unattributed result is how a finished email summary
+    // gets read back as the outcome of the booking that started after it.
+    lastOutcome?.let { outcome ->
+      out.add(
+          if (isRunning() || blocked != null)
+              "AN EARLIER TASK, now finished, reported this: \"$outcome\". It belongs to that " +
+                  "earlier task, NOT to the one above. Never report it as the outcome of what is " +
+                  "running now."
+          else "What it reported: \"$outcome\".",
       )
     }
     if (queued.isNotEmpty()) {
@@ -150,8 +172,19 @@ class ActivityLog(
       "approval-resolved" -> {
         blockedOn = null
       }
-      "complete",
-      "error" -> end()
+      // The outcome is kept whether the task succeeded or failed, and a `complete` with no summary
+      // is recorded as exactly that rather than left null: "it finished and said nothing" is a real
+      // answer to "how did that go?", and the absence of one is what gets filled in with a guess.
+      "complete" -> {
+        end()
+        lastOutcome =
+            e.optString("summary").takeIf { it.isNotEmpty() }
+                ?: "finished without saying what it found"
+      }
+      "error" -> {
+        end()
+        lastOutcome = "it failed: ${e.optString("text")}"
+      }
     }
   }
 

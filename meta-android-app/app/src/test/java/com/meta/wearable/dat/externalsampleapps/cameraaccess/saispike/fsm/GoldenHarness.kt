@@ -8,10 +8,6 @@
 //
 // Assert the EFFECT and STATE layer, never phrasing: the live model's wording varies, and phrasing
 // quality is the eval's job, not this catalog's.
-//
-// Ported from cloud-api `core/golden/scenarios.ts`. The scenario NAMES are load-bearing — they
-// reconcile against docs/plans/golden-catalog-inventory.md in the server repo, which is how a
-// dropped scenario stays visible.
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm
 
@@ -70,7 +66,7 @@ val goldenBrain: (DecisionInput, ConciergeState) -> List<Effect> = { input, stat
             if (u.contains("now"))
                 listOf(
                     Effect.Say("switching now"),
-                    Effect.Interrupt,
+                    Effect.Interrupt(),
                     Effect.ForwardToAgent("check email"))
             else
                 listOf(

@@ -59,8 +59,13 @@ sealed interface Effect {
   /** Hold a task in the FSM only — no durable doc, no agent traffic. */
   data class Enqueue(val task: String, val urgency: Urgency) : Effect
 
-  /** Stop the running turn and drop the queue. Has no scope. */
-  data object Interrupt : Effect
+  /**
+   * Stop the running turn, and — unless [scope] narrows it — the queue with it.
+   *
+   * The scope is the one place this grammar goes beyond cloud-api's; see [InterruptScope] for the
+   * cancellation nobody could express without it.
+   */
+  data class Interrupt(val scope: InterruptScope = InterruptScope.EVERYTHING) : Effect
 
   /** Drop a waiting task. `task` absent means all of them. */
   data class CancelQueued(val task: String? = null) : Effect
@@ -116,7 +121,10 @@ fun parseEffect(raw: JSONObject?): Effect? {
     "deny" -> Effect.Deny(raw.str("reason"))
     // An absent or unrecognised urgency defaults to normal — NOT a rejection.
     "enqueue" -> raw.str("task")?.let { Effect.Enqueue(it, Urgency.fromWire(raw.str("urgency"))) }
-    "interrupt" -> Effect.Interrupt
+    // An absent or unrecognised scope is `everything`, matching `enqueue`'s urgency: the wider
+    // reading is what a bare "stop" means, so a scope this build does not know must not silently
+    // narrow the cancellation and leave work running the user thinks they stopped.
+    "interrupt" -> Effect.Interrupt(InterruptScope.fromWire(raw.str("scope")))
     "cancelQueued" -> Effect.CancelQueued(raw.str("task"))
     "sendQueuedNow" -> Effect.SendQueuedNow(raw.str("task"))
     "setState" -> Mode.fromWire(raw.str("mode"))?.let { Effect.SetState(it) }

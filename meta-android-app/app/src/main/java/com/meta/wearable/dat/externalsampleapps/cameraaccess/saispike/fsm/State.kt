@@ -51,6 +51,30 @@ enum class Urgency(val wire: String) {
   }
 }
 
+/**
+ * How much an `interrupt` stops.
+ *
+ * A divergence from cloud-api, which has only the unscoped abort. It exists because there was no way
+ * to say the commonest cancellation of all: DROP THIS ONE AND CARRY ON. `interrupt` took the queue
+ * with it, `cancelQueued` cannot touch a running task, and `relayToAgent` only narrows a task from
+ * the inside — so a user who said "forget it" over a running task had nothing that meant it, and the
+ * model reached for `resetSession`, which wipes the conversation and stops no work at all.
+ *
+ * [EVERYTHING] stays the default, because "stop" with no qualifier means stop, and an absent or
+ * unrecognised scope must not quietly become the narrower reading.
+ */
+enum class InterruptScope(val wire: String) {
+  /** Abort the running turn AND drop everything waiting behind it. */
+  EVERYTHING("everything"),
+  /** Abort the running turn only. The waiting list survives, and the next task starts by itself. */
+  RUNNING("running");
+
+  companion object {
+    fun fromWire(v: String?): InterruptScope =
+        entries.firstOrNull { it.wire == v?.trim()?.lowercase() } ?: EVERYTHING
+  }
+}
+
 /** A photo captured for a task, bound to it rather than left on the bridge. */
 data class TaskAttachment(
     val path: String,
@@ -135,6 +159,39 @@ data class ConciergeState(
      * next `interrupt` is them having answered "everything" — it goes through.
      */
     val interruptScopeAsked: Boolean? = null,
+    /**
+     * We've already put "do you want to wipe the whole conversation?" to the user, so the next
+     * `resetSession` is them having said yes.
+     *
+     * The same one-shot shape as [interruptScopeAsked], and for a sharper reason: a rotation cannot
+     * be undone. "Forget it", "never mind" and "drop that" are nearly always about the last thing
+     * said, yet they share their vocabulary with "forget everything we talked about" — and on device
+     * a bare "forget it" was heard as the second one and cleared the conversation. A misrouted
+     * dismissal now costs one question instead of the session.
+     */
+    val resetConfirmAsked: Boolean? = null,
+    /**
+     * The last turn was ABORTED, so anything still arriving from it is about work the user cancelled.
+     *
+     * The abort is three-part and only two parts are ours (see `HttpAgentBridge.abort`): the device
+     * stops following the stream and stops its own work immediately, but the agent is merely ASKED to
+     * stop, over a round trip, and it does not stop mid-thought. A result already on its way arrives
+     * after the FSM has cleared the turn — and until this flag existed it was indistinguishable from a
+     * result the user was waiting for, so Sai read out the answer to the very question they had just
+     * told it to drop.
+     *
+     * Keyed on the abort rather than on "nothing is in flight", which was the first attempt and is
+     * wrong in a way that matters: `applyAgentStatus` ends a turn on a stray `idle` status too, so an
+     * empty [inFlight] is also what a perfectly live turn looks like for a moment. Suppressing on that
+     * would lose real results, and losing a result is the worse failure of the two.
+     *
+     * Cleared by [startTurn] and NOT by [endTurn], which is the ordering the guard depends on: the
+     * terminal event of the aborted turn runs through ingest — and therefore `endTurn` — on its way to
+     * being suppressed, so an `endTurn` that cleared this would clear it with the event still in hand.
+     * A new task starting is the honest end of the window: from there the FSM is waiting on something
+     * again, and anything arriving is presumed to be that.
+     */
+    val abortedTurn: Boolean = false,
 )
 
 // NOTE: there is deliberately NO sessionId here. Session identity belongs to the bridge — the id
@@ -195,12 +252,24 @@ fun ConciergeState.removeQueued(index: Int): ConciergeState =
  * - `interruptScopeAsked` means "we already asked which task to stop". It was asked about the
  *   PREVIOUS turn's requests, so carrying it into a new one lets the next `interrupt` abort fresh
  *   work without asking — the exact failure [endTurn] clears it to prevent.
+ * - `resetConfirmAsked` is the same argument about a bigger button: it means "the user has been
+ *   asked whether to wipe the conversation". New work is a new context, and a stale yes would let
+ *   the next stray "forget it" rotate the session without a question.
+ * - `abortedTurn` closes the window in which a result is presumed to belong to cancelled work. Once
+ *   the FSM is waiting on something again, it has to believe what arrives — see [ConciergeState].
  *
  * Callers needing a different mode (e.g. a task that starts while parked) set it after; this is the
  * common shape, not a straitjacket.
  */
 fun ConciergeState.startTurn(text: String): ConciergeState =
-    beginTask(text).copy(mode = Mode.WORKING, awaiting = null, interruptScopeAsked = null)
+    beginTask(text)
+        .copy(
+            mode = Mode.WORKING,
+            awaiting = null,
+            interruptScopeAsked = null,
+            resetConfirmAsked = null,
+            abortedTurn = false,
+        )
 
 /** Record a request forwarded into the current agent turn. */
 fun ConciergeState.beginTask(text: String): ConciergeState = copy(inFlight = inFlight + text)

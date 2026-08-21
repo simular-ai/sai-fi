@@ -55,10 +55,15 @@ class StateTest {
   // ── startTurn / endTurn ────────────────────────────────────────────────────
 
   @Test
-  fun `startTurn clears both leftovers that used to drift across the six start sites`() {
+  fun `startTurn clears every leftover that used to drift across the six start sites`() {
     val parked =
         initialState()
-            .copy(mode = Mode.AWAITING_USER, awaiting = WaitReason.APPROVAL, interruptScopeAsked = true)
+            .copy(
+                mode = Mode.AWAITING_USER,
+                awaiting = WaitReason.APPROVAL,
+                interruptScopeAsked = true,
+                resetConfirmAsked = true,
+            )
 
     val after = parked.startTurn("do the thing")
 
@@ -68,6 +73,10 @@ class StateTest {
         "the scope question was asked about the PREVIOUS turn — carrying it lets the next " +
             "interrupt abort fresh work without asking",
         after.interruptScopeAsked)
+    assertNull(
+        "consent to a wipe belongs to the moment it was asked — a task later, a stray " +
+            "resetSession would read as the user's answer and there is no undo behind it",
+        after.resetConfirmAsked)
     assertEquals(listOf("do the thing"), after.inFlight)
   }
 

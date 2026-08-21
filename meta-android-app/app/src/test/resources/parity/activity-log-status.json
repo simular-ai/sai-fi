@@ -111,7 +111,7 @@
       "readAt": 1700000005000
     },
     "expected": {
-      "statusText": "Finished after 1 step(s).\nRecent activity (oldest first):\nstatus: processing\ndrafting reply\nfinished: Sent the email.",
+      "statusText": "Finished after 1 step(s).\nWhat it reported: \"Sent the email.\".\nRecent activity (oldest first):\nstatus: processing\ndrafting reply\nfinished: Sent the email.",
       "msSinceTaskStart": 2000
     }
   },
@@ -153,7 +153,7 @@
       "readAt": 1700000004000
     },
     "expected": {
-      "statusText": "Finished after 1 step(s).\nRecent activity (oldest first):\nstatus: processing\nsearching (web.search)\nfinished: Found three.\nstatus: aborting",
+      "statusText": "Finished after 1 step(s).\nWhat it reported: \"Found three.\".\nRecent activity (oldest first):\nstatus: processing\nsearching (web.search)\nfinished: Found three.\nstatus: aborting",
       "msSinceTaskStart": 2000
     }
   },
@@ -180,7 +180,7 @@
       "readAt": 1700000008000
     },
     "expected": {
-      "statusText": "Finished after 0 step(s).\nRecent activity (oldest first):\nstatus: processing\nerror: network timeout",
+      "statusText": "Finished after 0 step(s).\nWhat it reported: \"it failed: network timeout\".\nRecent activity (oldest first):\nstatus: processing\nerror: network timeout",
       "msSinceTaskStart": 3000
     }
   },
@@ -514,6 +514,61 @@
     }
   },
   {
+    "name": "a finished result outlives the buffer the next task fills",
+    "input": {
+      "maxLines": 3,
+      "timeline": [
+        {
+          "at": 1700000000000,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000100,
+          "event": {
+            "type": "complete",
+            "summary": "3 unread, all newsletters"
+          }
+        },
+        {
+          "at": 1700000000200,
+          "event": {
+            "type": "status",
+            "status": "processing"
+          }
+        },
+        {
+          "at": 1700000000300,
+          "event": {
+            "type": "progress",
+            "text": "opening the browser"
+          }
+        },
+        {
+          "at": 1700000000400,
+          "event": {
+            "type": "progress",
+            "text": "reading the page"
+          }
+        },
+        {
+          "at": 1700000000500,
+          "event": {
+            "type": "progress",
+            "text": "filling the form"
+          }
+        }
+      ],
+      "readAt": 1700000001000
+    },
+    "expected": {
+      "statusText": "Still working — 3 step(s) done so far. You have no estimate of how much longer; don't invent one.\nAN EARLIER TASK, now finished, reported this: \"3 unread, all newsletters\". It belongs to that earlier task, NOT to the one above. Never report it as the outcome of what is running now.\nRecent activity (oldest first):\nopening the browser\nreading the page\nfilling the form",
+      "msSinceTaskStart": 800
+    }
+  },
+  {
     "name": "the queue drains and is no longer mentioned",
     "input": {
       "maxLines": null,
@@ -554,7 +609,7 @@
       "readAt": 1700000001000
     },
     "expected": {
-      "statusText": "Finished after 0 step(s).\nRecent activity (oldest first):\nstatus: processing\nfinished: a is done",
+      "statusText": "Finished after 0 step(s).\nWhat it reported: \"a is done\".\nRecent activity (oldest first):\nstatus: processing\nfinished: a is done",
       "msSinceTaskStart": 200
     }
   }

@@ -97,9 +97,36 @@ class EffectsTest {
   @Test
   fun `the payload-free effects parse from kind alone`() {
     assertEquals(Effect.Approve, parseEffect(effect("kind" to "approve")))
-    assertEquals(Effect.Interrupt, parseEffect(effect("kind" to "interrupt")))
     assertEquals(Effect.ResetSession, parseEffect(effect("kind" to "resetSession")))
     assertEquals(Effect.Noop, parseEffect(effect("kind" to "noop")))
+  }
+
+  /**
+   * `interrupt` carries the one piece of payload this grammar has that cloud-api's does not, and the
+   * DEFAULT is the part worth pinning: a bare `interrupt` has always meant "stop the lot", and every
+   * model that has ever called it sent it bare. A scope that defaulted the other way would silently
+   * narrow every existing "stop" to the running task and leave the queue running behind it.
+   */
+  @Test
+  fun `a bare interrupt still means everything, and an unknown scope falls back to it`() {
+    assertEquals(
+        Effect.Interrupt(InterruptScope.EVERYTHING), parseEffect(effect("kind" to "interrupt")))
+    assertEquals(
+        Effect.Interrupt(InterruptScope.EVERYTHING),
+        parseEffect(effect("kind" to "interrupt", "scope" to "the whole lot")))
+    assertEquals(
+        Effect.Interrupt(InterruptScope.EVERYTHING),
+        parseEffect(effect("kind" to "interrupt", "scope" to "everything")))
+  }
+
+  @Test
+  fun `scope running parses, case and whitespace insensitively`() {
+    assertEquals(
+        Effect.Interrupt(InterruptScope.RUNNING),
+        parseEffect(effect("kind" to "interrupt", "scope" to "running")))
+    assertEquals(
+        Effect.Interrupt(InterruptScope.RUNNING),
+        parseEffect(effect("kind" to "interrupt", "scope" to " Running ")))
   }
 
   @Test

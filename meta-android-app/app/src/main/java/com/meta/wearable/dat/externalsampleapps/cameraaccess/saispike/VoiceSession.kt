@@ -30,10 +30,11 @@ import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.Timer
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.VoiceChannel
 import android.os.Handler
 import android.os.Looper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -98,6 +99,15 @@ class HandlerTimer(private val handler: Handler = Handler(Looper.getMainLooper()
  * Owns the FSM, the bridge, and the reader that feeds agent events into it. Reconnect lives here
  * too: the stream is a long-lived SSE connection, and a drop mid-call is expected rather than
  * exceptional.
+ *
+ * A call does NOT own a conversation. This used to mint a fresh `api` session on its first forward,
+ * to bound how far a bad turn could travel — the hazard is real, and `docs/VOICE_FSM.md` keeps the
+ * story. But a call ends far more easily than a conversation does: five quiet minutes, folding the
+ * glasses, or the model hearing a goodbye. Every one of those minted a page the user had not asked
+ * for, and one conversation could span four of them. The session is the SERVER's, resolved through
+ * its `{uid}_{machineId}_{channel}` pointer, and the only thing that rotates it is the user saying
+ * so — [HttpAgentBridge.resetSession], which works now and is what escaping a poisoned transcript
+ * costs. Nothing here should rotate on its own initiative.
  */
 class VoiceSession(
     private val baseUrl: String,
@@ -117,6 +127,15 @@ class VoiceSession(
      * an open microphone costs money whether or not anyone is still wearing the glasses.
      */
     private val onCostGuard: (CostGuardReason) -> Unit = {},
+    /**
+     * Stop the DEVICE's share of the running turn — handed to the bridge, and called on abort.
+     *
+     * A turn is not only the request the server is working on: a glasses capture runs here, on this
+     * phone, for as long as the camera takes. Aborting the remote half alone is what left the camera
+     * grinding through its retries after the user said "stop", with the photo landing for a task that
+     * had already been dropped.
+     */
+    private val abortLocalWork: () -> Unit = {},
     private val maxCallMs: Long? = DEFAULT_MAX_CALL_MS,
     private val idleMs: Long? = DEFAULT_IDLE_MS,
     private val onLog: (String) -> Unit = {},
@@ -126,42 +145,6 @@ class VoiceSession(
     const val DEFAULT_MAX_CALL_MS = 60L * 60_000
     const val DEFAULT_IDLE_MS = 5L * 60_000
   }
-  /**
-   * A call gets a conversation of its own.
-   *
-   * Without this every call shares one dedicated `api` session that grows forever, and that is a
-   * standing hazard rather than a tidiness problem: anything that lands in the transcript is read
-   * back as the agent's own prior turns on every later call, so one bad turn is not a bad turn, it
-   * is a permanent change of behaviour. That is not hypothetical — a stubbed reply written during
-   * local testing was still being imitated by the real agent days later, on a machine doing real
-   * work, and no amount of fixing the code that wrote it helped, because the fix does not reach the
-   * data. A call boundary bounds the blast radius to one call.
-   *
-   * Started lazily and awaited by the FIRST forward rather than fired at `start()`: a call that
-   * never asks for anything should not mint a session, and rotating in the background would race
-   * the first turn into the OLD session, which is the one case this exists to prevent.
-   *
-   * Never fatal. A failed rotation (offline, or the server's 20/hour cap) leaves the call on the
-   * previous session, which is exactly today's behaviour — degraded, not broken. Auth failures are
-   * deliberately not routed through [endCallIfRejected]; the first real send reports those, and it
-   * reports them better.
-   */
-  private val ownSession: Deferred<Unit> by lazy {
-    scope.async {
-      runCatching {
-            VoiceChannelClient.postOperation(
-                baseUrl,
-                token(),
-                "new-session",
-                VoiceChannelClient.newSessionBody(machineId))
-          }
-          .onFailure {
-            onLog("[voice] kept the previous session — could not start a fresh one (${it.message})")
-          }
-      Unit
-    }
-  }
-
   private val transport =
       object : VoiceTransport {
         override suspend fun sendMessage(
@@ -170,8 +153,6 @@ class VoiceSession(
             attachments: JSONArray?,
             follow: Boolean,
         ) {
-          // Before the first forward, never after: `ownSession` completes once per call.
-          ownSession.await()
           val stream =
               endCallIfRejected {
                 VoiceChannelClient.openMessageStream(
@@ -191,6 +172,8 @@ class VoiceSession(
           followTurn(stream)
         }
 
+        override fun abandonTurn() = stopFollowingTurn("it was aborted")
+
         override suspend fun post(path: String, body: JSONObject): JSONObject =
             endCallIfRejected {
               VoiceChannelClient.postOperation(
@@ -198,7 +181,7 @@ class VoiceSession(
             }
       }
 
-  val bridge = HttpAgentBridge(machineId, transport, onLog)
+  val bridge = HttpAgentBridge(machineId, transport, onLog, abortLocalWork)
 
   private val concierge =
       Concierge(
@@ -210,6 +193,23 @@ class VoiceSession(
       )
 
   private var turnJob: Job? = null
+  /**
+   * The connection [turnJob] is reading, held so it can be disconnected.
+   *
+   * Cancelling the job does not end the read: it is parked in a blocking `readLine` on a connection
+   * with no read timeout, and coroutine cancellation cannot interrupt that. Only closing the
+   * connection can, which is what [VoiceChannelClient.TurnStream.discard] does.
+   */
+  private var turnStream: VoiceChannelClient.TurnStream? = null
+  /**
+   * Which turn the reader below is allowed to speak for. Bumped by every teardown and every new turn.
+   *
+   * Cancelling [turnJob] is not enough on its own, and the gap is not theoretical: an event can be
+   * past its `ensureActive` check and suspended on the FSM's mutex — the very mutex an abort holds
+   * while it runs — so it resumes after the interrupt and applies against a state that has already
+   * been cleared. A generation is checked at the point of USE, which is the only place late enough.
+   */
+  @Volatile private var turnGeneration = 0
   @Volatile private var active = false
 
   private val guard =
@@ -281,7 +281,9 @@ class VoiceSession(
    * a 403 can now surface.
    */
   private fun followTurn(stream: VoiceChannelClient.TurnStream) {
-    turnJob?.cancel()
+    stopFollowingTurn("a newer turn superseded it")
+    turnStream = stream
+    val gen = turnGeneration
     turnJob =
         scope.launch {
           try {
@@ -291,6 +293,31 @@ class VoiceSession(
             onConnectionChange(true)
             stream.read(
                 onEvent = { event ->
+                  // A turn this device has stopped following must not be heard from. `onAgentEvent`
+                  // does not suspend, so without this check it ran — a line in the activity log and
+                  // a nudge in front of the model — before the suspending call below noticed the
+                  // cancellation. One stale event from an abandoned turn is enough to make Sai
+                  // report the wrong task's result.
+                  currentCoroutineContext().ensureActive()
+                  // The generation as well, because `ensureActive` cannot see an event that is
+                  // already past it and parked on the FSM's mutex — which is the mutex an abort
+                  // holds while it runs. Both sinks are gated, not just the FSM: `onAgentEvent` is
+                  // the one that writes the activity log and puts the nudge in front of the model,
+                  // and on 2026-08-20 it is the one that actually spoke a stopped task's result.
+                  if (gen != turnGeneration) {
+                    onLog("[voice] dropped ${event::class.simpleName} from an abandoned turn")
+                    return@read
+                  }
+                  // And the same two sinks again for the turn the user ABORTED, which the generation
+                  // above cannot catch: not following a stream stops what we would have read FROM it,
+                  // but a message posted into a turn the server never actually stopped is folded in as
+                  // a steer and replays that turn's events onto the stream we ARE reading. The abort
+                  // is a request over a round trip, not a guarantee — so the answer to a cancelled
+                  // question can arrive by a route nothing abandoned.
+                  if (concierge.disownsAgentEvents()) {
+                    onLog("[voice] dropped ${event::class.simpleName} from an aborted turn")
+                    return@read
+                  }
                   // The log and the nudge router see every event; the FSM decides what it means.
                   onAgentEvent(event)
                   concierge.handleAgentEvent(event)
@@ -300,17 +327,52 @@ class VoiceSession(
             // Deliberately NOT reported as disconnected here. A turn ending normally is the common
             // case and leaves nothing connected by design; flagging it would light the chip — which
             // outranks paused and muted — for the whole gap until the next task.
+          } catch (e: CancellationException) {
+            // Superseded or torn down — not a drop. Reported as one it lit the disconnected chip and
+            // then told the FSM its live turn had been lost, on the way to starting a new one.
+            throw e
           } catch (e: Exception) {
+            // Same generation test, and it is load-bearing here rather than tidy: `discard()` is
+            // what unblocks the parked `readLine`, and it does so by breaking the socket — so an
+            // intentional teardown surfaces as an IOException whenever it beats the cancellation
+            // through. Reported as a drop it would light the disconnected chip and then tell the FSM
+            // the turn was LOST, which says "it may still be running" about work we just stopped.
+            if (gen != turnGeneration) throw CancellationException("turn abandoned")
             onLog("[voice] turn stream dropped: ${e.message}")
             onConnectionChange(false)
           }
           // Whatever ended the stream, the turn is over as far as this device can tell. Told to the
           // FSM as an error rather than a completion: a dropped stream is not a finished task, and
           // reporting it as one is how "all done" gets said about work that may still be running.
-          if (active && concierge.getState().isWorking()) {
+          if (active && gen == turnGeneration && concierge.getState().isWorking()) {
             concierge.handleAgentEvent(AgentEvent.Error(TURN_STREAM_LOST))
           }
+          // Only if it is still ours: a newer turn may already have taken the slot.
+          if (turnStream === stream) turnStream = null
         }
+  }
+
+  /**
+   * Stop reading the turn in flight: cancel the reader, hang up on the connection, retire the
+   * generation.
+   *
+   * All three, because each covers what the others cannot. Cancelling the job does not end the read —
+   * it is parked in a blocking `readLine` on a connection with no read timeout — so the socket stayed
+   * open and an IO thread stayed parked until the server got round to ending the turn itself.
+   * Closing the connection does not stop an event already parsed and waiting on the FSM's mutex,
+   * which is what the generation is for.
+   *
+   * This is the teardown `applyInterrupt` has always said happened. It did not, and the cost was a
+   * task the user had stopped being read to its natural end and reported as finished.
+   */
+  private fun stopFollowingTurn(why: String) {
+    if (turnJob == null && turnStream == null) return
+    onLog("[voice] stopped following the turn — $why")
+    turnGeneration++
+    turnJob?.cancel()
+    turnJob = null
+    turnStream?.discard()
+    turnStream = null
   }
 
   /**
@@ -346,8 +408,7 @@ class VoiceSession(
 
   fun close() {
     active = false
-    turnJob?.cancel()
-    turnJob = null
+    stopFollowingTurn("the call ended")
     guard.dispose()
     concierge.stop()
   }

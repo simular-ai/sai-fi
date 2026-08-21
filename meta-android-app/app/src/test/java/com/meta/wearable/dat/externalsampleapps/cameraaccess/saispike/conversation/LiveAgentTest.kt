@@ -2,7 +2,7 @@
 
 // The contract check: does cloud-api still send what the FSM expects?
 //
-//   SAI_LIVE_AGENT=1 SAI_CONCIERGE_URL=… SAI_MACHINE_ID=… SAI_ID_TOKEN=… \
+//   SAI_LIVE_AGENT=1 SAI_API_URL=… SAI_MACHINE_ID=… SAI_ID_TOKEN=… \
 //     ./gradlew :app:testDebugUnitTest --tests "*LiveAgentTest*" --rerun
 //
 // (`--rerun` because Gradle does not treat environment variables as task inputs, so a second run

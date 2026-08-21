@@ -44,7 +44,7 @@ data class LiveAgentConfig(
     /** Read the config from the environment, or explain precisely what is missing. */
     fun fromEnv(): Result<LiveAgentConfig> {
       val missing = mutableListOf<String>()
-      val url = System.getenv("SAI_CONCIERGE_URL")?.trimEnd('/') ?: run { missing += "SAI_CONCIERGE_URL"; "" }
+      val url = System.getenv("SAI_API_URL")?.trimEnd('/') ?: run { missing += "SAI_API_URL"; "" }
       val machine = System.getenv("SAI_MACHINE_ID") ?: run { missing += "SAI_MACHINE_ID"; "" }
       val token = System.getenv("SAI_ID_TOKEN") ?: run { missing += "SAI_ID_TOKEN"; "" }
       return if (missing.isEmpty()) Result.success(LiveAgentConfig(url, machine, token))
@@ -84,6 +84,7 @@ class LiveAgent(
   val errors = mutableListOf<String>()
 
   private var turnJob: Job? = null
+  private var turnStream: VoiceChannelClient.TurnStream? = null
 
   override suspend fun sendMessage(
       machineId: String,
@@ -118,7 +119,8 @@ class LiveAgent(
     started += message
     // Read on its own job so this returns once ACCEPTED, not once the turn is done — the FSM holds
     // its mutex across this call and needs to be out of it before these events arrive.
-    turnJob?.cancel()
+    abandonTurn()
+    turnStream = stream
     turnJob =
         scope.launch {
           runCatching {
@@ -135,7 +137,28 @@ class LiveAgent(
         }
   }
 
+  /**
+   * Stop reading the turn, mirroring `VoiceSession.stopFollowingTurn`.
+   *
+   * Both halves, and the connection is the one that matters: cancelling the job leaves the reader
+   * parked in a blocking `readLine` against a real socket with no read timeout, so without the
+   * discard this tier would go on receiving the phantom events that production's bug was made of —
+   * and would report the contract as healthy while reproducing the failure.
+   */
+  override fun abandonTurn() {
+    if (turnJob == null && turnStream == null) return
+    log("[live] stopped following the turn")
+    turnJob?.cancel()
+    turnJob = null
+    turnStream?.discard()
+    turnStream = null
+  }
+
+  /** Operation paths this run posted — `abort`, `new-session`, an approval. */
+  val posts = mutableListOf<String>()
+
   override suspend fun post(path: String, body: JSONObject): JSONObject {
+    posts += path
     log("[live] → POST $path")
     return VoiceChannelClient.postOperation(
         config.baseUrl, config.idToken, path, body.put("machineId", config.machineId))
