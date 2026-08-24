@@ -1,7 +1,7 @@
 bfb11ea552ef1b92cee33f2667a2421d78072137
 
-These fixtures are a COPY, taken at the sai-fi commit above (plus speech.json, added on the
-Android side as part of this port — it did not exist before), of
+These fixtures are a COPY, taken at the sai-fi commit above (plus speech.json and
+fsm-scenarios.json, both added on the Android side as part of this port — neither existed before), of
   meta-android-app/app/src/test/resources/parity/*.json
 
 Do not track main. docs/CONCIERGE_CLIENT_PROTOCOL.md §8 asks a port to pin a ref and diff it on

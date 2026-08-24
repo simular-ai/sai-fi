@@ -21,6 +21,9 @@
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike
 
+// The FSM catalog's fixture lives in the fsm package, beside the catalog it serialises.
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.saispike.fsm.fsmScenarios
+
 /** A pinned base time so ActivityLog output never depends on the wall clock. */
 const val T0 = 1_700_000_000_000L
 
@@ -40,6 +43,7 @@ val GOLDEN_FILES: List<Pair<String, () -> List<Jv>>> =
         "constants.json" to ::nudgeConstants,
         "activity-log-status.json" to ::activityLogStatus,
         "speech.json" to ::speechLines,
+        "fsm-scenarios.json" to ::fsmScenarios,
     )
 
 /** describeAgentEvent nudges for every AgentEvent type. */

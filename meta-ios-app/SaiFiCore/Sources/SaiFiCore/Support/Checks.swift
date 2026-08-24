@@ -93,6 +93,7 @@ public func allChecks(fixtures: ParityFixtures = .fromSourceTree()) -> [Check] {
   checks += speechChecks(fixtures)
   checks += conciergeProtocolChecks(fixtures)
   checks += activityLogChecks(fixtures)
+  checks += fsmScenarioChecks(fixtures)
   return checks
 }
 
