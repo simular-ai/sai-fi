@@ -91,6 +91,7 @@ public func allChecks(fixtures: ParityFixtures = .fromSourceTree()) -> [Check] {
   checks += stateChecks()
   checks += effectsChecks()
   checks += speechChecks(fixtures)
+  checks += conciergeProtocolChecks(fixtures)
   return checks
 }
 

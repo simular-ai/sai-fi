@@ -24,13 +24,7 @@ import Foundation
 /// How much of a forwarded request is read back when asking the user what to stop.
 private let taskEchoMax = 70
 
-/// The prompt-injection fence, and a bare quote.
-///
-/// Agent-derived and queue-derived text is DATA, never instructions, and the fence is what says so
-/// inside the prompt. `docs/SAI_GLASSES_APP.md` §3 lists keeping it intact as a rule; it is spelled
-/// out as a constant here so no amount of escaping can quietly turn three quotes into two.
-private let fence = "\"\"\""
-private let q = "\""
+// `fence` and `q` live in Support/Fencing.swift — shared with ConciergeProtocol.swift.
 
 // ── say: spoken verbatim ─────────────────────────────────────────────────────
 
