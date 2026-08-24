@@ -181,6 +181,14 @@ public struct JsonArray: @unchecked Sendable {
     opt(index) as? String
   }
 
+  /// `org.json`'s coercing `optString(index)`, for the places the Kotlin uses it — the `queued` list
+  /// in a `session-state` event, read by both `renderAgentActivity` and `ActivityLog`. Kept separate
+  /// from `optStringStrict` so the strict half of the parse boundary cannot pick this up by accident.
+  public func optString(_ index: Int, _ fallback: String = "") -> String {
+    guard let value = opt(index) else { return fallback }
+    return JsonObject.coerceScalar(value) ?? fallback
+  }
+
   public func optObject(_ index: Int) -> JsonObject? {
     guard let dict = opt(index) as? [String: Any] else { return nil }
     return JsonObject(dict)

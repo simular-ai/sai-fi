@@ -231,7 +231,7 @@ public func renderAgentActivity(_ e: JsonObject) -> String {
   // of a demo log concludes a queued task started.
   case "session-state":
     let queued = e.optArray("queued").map { arr in
-      (0..<arr.count).map { arr.optStringStrict($0) ?? JsonObject.coerceScalar(arr.opt($0) ?? "") ?? "" }
+      (0..<arr.count).map { arr.optString($0) }
     } ?? []
     let blocked = e.optString("blockedOn")
     var parts: [String] = []
