@@ -1,0 +1,14 @@
+bfb11ea552ef1b92cee33f2667a2421d78072137
+
+These fixtures are a COPY, taken at the sai-fi commit above (plus speech.json, added on the
+Android side as part of this port — it did not exist before), of
+  meta-android-app/app/src/test/resources/parity/*.json
+
+Do not track main. docs/CONCIERGE_CLIENT_PROTOCOL.md §8 asks a port to pin a ref and diff it on
+update, and this is that pin. The files are the Android↔iOS parity gate: the Kotlin and the Swift
+implementations of ConciergeProtocol and ActivityLog both render against them byte for byte, which is
+the only thing standing between two implementations and the drift that killed the TypeScript/Kotlin
+pair before them.
+
+To refresh: re-copy from the Android tree, update the ref above, and read the diff. A diff here is a
+wording change someone should review, not something a user should discover on the glasses.
