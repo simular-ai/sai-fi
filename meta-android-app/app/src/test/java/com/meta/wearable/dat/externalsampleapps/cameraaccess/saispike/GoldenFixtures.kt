@@ -39,6 +39,7 @@ val GOLDEN_FILES: List<Pair<String, () -> List<Jv>>> =
         "agent-activity-render.json" to ::agentActivityRender,
         "constants.json" to ::nudgeConstants,
         "activity-log-status.json" to ::activityLogStatus,
+        "speech.json" to ::speechLines,
     )
 
 /** describeAgentEvent nudges for every AgentEvent type. */
