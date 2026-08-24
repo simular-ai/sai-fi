@@ -453,7 +453,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
-				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = ;
+				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = "";
 				ENABLE_PREVIEWS = YES;
 				FRAMEWORK_SEARCH_PATHS = "";
 				INFOPLIST_FILE = SaiFi/Info.plist;
@@ -484,7 +484,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
-				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = ;
+				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = "";
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = SaiFi/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;

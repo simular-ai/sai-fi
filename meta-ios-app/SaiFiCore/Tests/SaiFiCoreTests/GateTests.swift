@@ -16,12 +16,18 @@ import XCTest
 
 final class GateTests: XCTestCase {
 
-  /// The fixtures ship as resources of THIS target, so read them from this bundle rather than from
-  /// the source tree — that is what makes the gate work from a built test bundle on CI.
+  /// The fixtures ship as resources of THIS target, so read them from this bundle rather than from the
+  /// source tree — that is what makes the gate work from a built test bundle on CI, where there is no
+  /// checkout to walk up from.
+  ///
+  /// NOTE the missing `parity/`. SwiftPM's `.process` FLATTENS the resource directory: the files land
+  /// directly in `Contents/Resources/`, not in a `parity` subfolder. Looking them up by their
+  /// original relative path silently returns nil, which is what sent this through the source-tree
+  /// fallback and hid the `#filePath` bug in `fromSourceTree`.
   private var fixtures: ParityFixtures {
-    guard let url = Bundle.module.url(forResource: "parity/speech", withExtension: "json") else {
-      // Falling back to the source tree keeps a local `swift test` working if resource processing
-      // ever flattens the directory; a genuinely missing file still fails inside the checks.
+    guard let url = Bundle.module.url(forResource: "speech", withExtension: "json") else {
+      // Only reachable if the resource declaration itself is wrong. Falling back to the checkout keeps
+      // a local `swift test` honest rather than reporting an empty gate as a pass.
       return .fromSourceTree()
     }
     return ParityFixtures(directory: url.deletingLastPathComponent())

@@ -45,10 +45,17 @@ public struct ParityFixtures: Sendable {
 
   public init(directory: URL) { self.directory = directory }
 
-  /// Resolve from the source tree. `#filePath` is
-  /// `<pkg>/Sources/SaiFiCore/Support/Checks.swift`, so four parents up is the package root.
-  public static func fromSourceTree(_ file: StaticString = #filePath) -> ParityFixtures {
-    let here = URL(fileURLWithPath: String(describing: file))
+  /// Resolve from the source tree.
+  ///
+  /// `#filePath` is used INSIDE the body, deliberately. As a default argument it would resolve at the
+  /// CALL SITE — which is how the XCTest target ended up looking for the fixtures under
+  /// `meta-ios-app/Tests/…` instead of `meta-ios-app/SaiFiCore/Tests/…`, while `saifi-check` worked by
+  /// accident because its default expression happens to live in this file. Anchoring it here makes the
+  /// answer independent of who asks.
+  ///
+  /// This file is `<pkg>/Sources/SaiFiCore/Support/Checks.swift`, so four parents up is the package root.
+  public static func fromSourceTree() -> ParityFixtures {
+    let here = URL(fileURLWithPath: #filePath)
     let packageRoot = here
       .deletingLastPathComponent()  // Support
       .deletingLastPathComponent()  // SaiFiCore
