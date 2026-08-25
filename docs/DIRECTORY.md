@@ -5,9 +5,9 @@ find the thing you care about without reading the whole tree. For *why* the app 
 way, read [`SAI_GLASSES_APP.md`](SAI_GLASSES_APP.md); for the *wire contract* it must honour,
 read [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md).
 
-**One sentence on the app:** an Android app that puts a voice concierge on Meta Ray-Ban glasses — it
+**One sentence on the app:** a phone app that puts a voice concierge on Meta Ray-Ban glasses — it
 opens a Gemini Live audio session directly with the user's own key, runs the conversation's state
-machine itself, and talks to the Sai API only to reach the agent.
+machine itself, and talks to the Sai API only to reach the agent. Android ships; iOS is in `meta-ios-app/`.
 
 ## Where to start reading
 
@@ -29,7 +29,8 @@ machine itself, and talks to the Sai API only to reach the agent.
 | `LICENSE` | Licence for this repo (Meta attribution included). |
 | `licenses/` | The two bundled font licences (Manrope, JetBrains Mono). |
 | `docs/` | This folder — the Markdown docs described below. |
-| `meta-android-app/` | **The app.** A standalone Kotlin/Gradle Android project. |
+| `meta-android-app/` | **The Android app.** A standalone Kotlin/Gradle project. |
+| `meta-ios-app/` | **The iOS port** (in progress). Local SwiftPM package `SaiFiCore/` is the pure half; the Xcode app target holds DAT / audio / UI. |
 | `presenter/` | A tiny Node/TypeScript demo dashboard (DEBUG-only spectator feed). |
 | `.github/workflows/android.yml` | CI: builds the app and runs the JVM unit tests. |
 

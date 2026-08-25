@@ -1,9 +1,9 @@
-# sai-fi — Android client for the voice concierge
+# sai-fi — voice concierge on Meta Ray-Ban glasses
 
-The standalone Android app that puts the Sai voice concierge on **Meta Ray-Ban glasses**. The phone
+The phone app that puts the Sai voice concierge on **Meta Ray-Ban glasses**. The phone
 opens a Gemini Live audio session with the user's own key, runs the conversation state machine
 itself, and talks to the Sai API only to reach the agent. The glasses are the microphone, speaker
-and camera.
+and camera. Android is the shipping client; iOS is the in-progress port.
 
 To verify a build on hardware, start with [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md).
 
@@ -14,7 +14,8 @@ modes, the effect grammar, the admission rule, the races, and why each rule exis
 [`VOICE_FSM.md`](VOICE_FSM.md). Read that before changing anything under `fsm/`.
 
 **Code:** `meta-android-app/` (Kotlin, display name "sai-fi", `applicationId ai.simular.saiglasses`,
-package `…cameraaccess.saispike`).
+package `…cameraaccess.saispike`) and `meta-ios-app/` (Swift, bundle id `ai.simular.saifi`, in
+progress).
 
 The applicationId and the Java package still carry the app's earlier name. They change together, to
 `ai.simular.saifi`, in a package rename — deliberately not with the display rename, because the
@@ -30,8 +31,10 @@ named only where they explain a current trade-off.
 
 - **Meta DAT is a native phone-app SDK**, mediated by the Meta AI companion app; the glasses connect
   over Bluetooth. There is no Meta-AI intent routing for third-party voice, so this app builds the
-  whole voice layer itself. Distribution is gated (developer-preview release channels; iOS is blocked
-  by MFi), which is why this is Android-only and side-loaded.
+  whole voice layer itself. Distribution is gated (developer-preview release channels). **iOS
+  development and internal TestFlight are open**; App Store and external TestFlight are blocked by
+  MFi (`com.meta.ar.wearable`) until Meta puts third-party apps on their Product Plan. The iOS port
+  lives in `meta-ios-app/`. The Android app is still the shipping client.
 - **A standalone Android app, not inside the Capacitor Sai app.** DAT is Kotlin/Swift. Fast native
   iteration beat embedding this in the existing desktop/mobile shell.
 - **Gemini Live owns audio; this app owns the conversation; the Sai API owns the agent.** There is
@@ -95,6 +98,17 @@ is running, for instance.
 | `GlassesGestureSession`              | DAT `DeviceSession` (no display/camera capability) reacting to the only temple gestures DAT surfaces: tap = mute/unmute Sai, tap-and-hold/doff/fold = end (all just `DeviceSessionState`; no gesture is remappable — see §5).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `SaiFiApp` / `MainActivity`          | App init (`Wearables.initialize` once); `MainActivity` is the DAT-registration deep-link callback host (`saiwearables`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `fsm/`                               | **The conversation state machine**: modes and transitions, the bounded effect grammar and its parse boundary, the admission rule that holds a mid-turn task instead of folding it in, the local held-task queue, the cost guard, and every line the FSM speaks. Everything but `Concierge.kt` is pure, which is what makes the 63-scenario golden catalog runnable as JVM tests; `Concierge.kt` serialises all four input kinds through one `Mutex`, because two forwards interleaving at a suspension point books the restaurant twice. Design: [`VOICE_FSM.md`](VOICE_FSM.md). `CallService.buildConcierge` builds one `VoiceSession` per call and feeds the model's tool calls straight into it.                        |
+
+### iOS modules
+
+The same architecture, in `meta-ios-app/`. `SaiFiCore/` is Foundation-only (FSM, protocol, policies, goldens). The Xcode target holds DAT and anything that needs AVFoundation / SwiftUI.
+
+| Module | Role |
+| --- | --- |
+| `SaiFiCore/` | Pure half. Gate: `swift run saifi-check`. |
+| `GlassesGestureSession` / `GlassesCamera` | DAT session + still capture. iOS 0.8: one session only; `stream.stop()` then `addStream` reuses the slot. |
+| `Prefs` / `PhoneLocation` / `Theme` / `CallNotifications` | Same keys, one-shot location, Sai tokens, ended-reason banner only (no ongoing-call notification). |
+| Audio / Gemini Live / agent HTTP / UI | In progress on sibling branches. |
 
 ---
 
@@ -235,6 +249,13 @@ DAT surfaces no gesture to bind it to (see §5).
 A capability-less session (this app attaches none) is what delivers taps. Attaching a throwaway
 camera stream to "keep the session live" would need the DAT camera permission, light the privacy
 LED for the whole call, and reintroduce a camera capability the design omits.
+
+**iOS 0.8 (measured with MockDeviceKit on iPhone 17, 2026-08-25):** two `DeviceSession`s cannot
+coexist — a second `createSession` is refused — so capture attaches to the live gesture session
+and `addStream` is on demand. That is iOS-only: the privacy LED belongs to that session's stream.
+We still `stop()` the stream between captures rather than leaving it on for the whole call.
+`stream.stop()` then `addStream` on the same session still delivers frames (there is no
+`removeStream()`). Do not `session.stop()` after a capture: that is `STOPPED`, which ends the call.
 
 ---
 

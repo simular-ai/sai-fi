@@ -2,7 +2,8 @@
 
 <img src="docs/system-flow.png" alt="System flow" width="480">
 
-A standalone Android app that puts the **Sai voice concierge** on Meta Ray-Ban glasses.
+A standalone phone app that puts the **Sai voice concierge** on Meta Ray-Ban glasses. Android
+(`meta-android-app/`) is the shipping client; iOS (`meta-ios-app/`) is the in-progress port.
 
 The phone runs a Gemini Live audio session **directly, with your own API key**, and runs the whole
 conversation — the state machine that queues, interrupts and resolves — itself. It talks to Sai's
