@@ -15,9 +15,11 @@ from the Android one.
 
 | | |
 | --- | --- |
-| `SaiFiCore/` | The pure half — building green, **82 checks passing** |
-| `SaiFi.xcodeproj` | Seeded from the CameraAccess sample and renamed; **not yet built** (see below) |
-| Everything else | Not written yet |
+| `SaiFiCore/` | The pure half — FSM, protocol, activity log, LiveTurnGate, VoiceProfile, every pure policy. **361 checks passing** (`swift run saifi-check`) |
+| `SaiFi.xcodeproj` | Seeded from the CameraAccess sample, renamed, Info.plist / xcconfig / Secrets wired, SaiFiCore linked as a local SPM package. Compiles for generic iOS without signing; Simulator runtimes are not required for that |
+| Everything else | Not written yet — glasses session, audio, Gemini Live client, agent HTTP, UI |
+
+The check registry is pinned at ≥361 in `GateTests` so a shrinking catalog cannot go green quietly.
 
 ## The two halves, and why they are separate packages
 

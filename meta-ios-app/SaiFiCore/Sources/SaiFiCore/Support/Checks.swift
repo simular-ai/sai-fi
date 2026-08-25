@@ -101,6 +101,9 @@ public func allChecks(fixtures: ParityFixtures = .fromSourceTree()) -> [Check] {
   checks += conciergeProtocolChecks(fixtures)
   checks += activityLogChecks(fixtures)
   checks += fsmScenarioChecks(fixtures)
+  checks += voiceProfileChecks()
+  checks += policyChecks()
+  checks += liveTurnGateChecks()
   return checks
 }
 

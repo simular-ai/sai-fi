@@ -52,7 +52,7 @@ final class GateTests: XCTestCase {
   /// against — the same argument as `FsmGoldenTest`'s PORTED_SCENARIO_COUNT on the Android side.
   func testTheGateStillHasEveryCheck() {
     XCTAssertGreaterThanOrEqual(
-      checkCount(fixtures: fixtures), 246,
+      checkCount(fixtures: fixtures), 361,
       "the check registry shrank — a check was removed rather than fixed")
   }
 }
