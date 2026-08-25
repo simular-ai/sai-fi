@@ -1,0 +1,39 @@
+// Config.xcconfig — the tracked half of the build configuration.
+//
+// It declares every key the app reads WITH AN EMPTY DEFAULT, then optionally includes the untracked
+// `Secrets.xcconfig` on top. That shape is deliberate and mirrors the Android build:
+//
+//   * a fresh clone builds and runs without any secrets at all;
+//   * a MISSING KEY IS NEVER A BUILD ERROR — it becomes an empty string and fails later at runtime
+//     with a named line (`start failed: no gemini_api_key`) rather than a mysterious network error;
+//   * nothing secret is ever tracked, and `#include?` (with the question mark) does not fail when the
+//     file is absent.
+//
+// Copy `Secrets.xcconfig.example` to `Secrets.xcconfig` and fill it in. Every key is documented there,
+// including the two xcconfig traps and the fact that the Firebase values are NOT the Android ones.
+
+// ── Meta AI registration ─────────────────────────────────────────────────────
+// `0` is what Developer Mode accepts, so the local loop needs nothing from the Wearables Developer
+// Center. TeamID is not here — Info.plist reads $(DEVELOPMENT_TEAM) from Signing & Capabilities.
+META_APP_ID = 0
+CLIENT_TOKEN =
+
+// ── the user's own Gemini key, and the Sai agent API ─────────────────────────
+GEMINI_API_KEY =
+SAI_API_URL = https:/$()/api.sai.simular.ai
+SAI_VERSION_TAG =
+
+// ── Google sign-in ──────────────────────────────────────────────────────────
+FIREBASE_APP_ID =
+FIREBASE_API_KEY =
+FIREBASE_PROJECT_ID =
+FIREBASE_GCM_SENDER_ID =
+IOS_CLIENT_ID =
+WEB_CLIENT_ID =
+// The reversed iOS client id becomes a URL scheme. Empty is fine until sign-in is wired up: an empty
+// CFBundleURLSchemes entry is inert rather than invalid.
+REVERSED_CLIENT_ID =
+
+// Local overrides, if present. MUST be last — later assignments win, which is what lets the untracked
+// file override the defaults above rather than the other way round.
+#include? "Secrets.xcconfig"

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>${PRODUCT_NAME}</string>
+	<string>sai-fi</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -30,6 +30,18 @@
 				<string>saifi</string>
 			</array>
 		</dict>
+		<!-- GoogleSignIn calls back on the reversed iOS client id. Empty until sign-in is
+		     configured, which is inert rather than invalid. -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.google.SignIn</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(REVERSED_CLIENT_ID)</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
@@ -49,12 +61,54 @@
 		<!-- Without Developer Mode, this key will need to be set with your Apple Developer Team ID - Set this in Xcode under Signing & Capabilities -->
 		<key>TeamID</key>
 		<string>$(DEVELOPMENT_TEAM)</string>
+		<!-- Meta's default is opted IN. This app streams the glasses mic to Google and the whole
+		     privacy posture (docs/SAI_GLASSES_APP.md §4) is that as little as possible leaves the
+		     device unannounced, so opt out. -->
+		<key>Analytics</key>
+		<dict>
+			<key>OptOut</key>
+			<true/>
+		</dict>
+	</dict>
+	<!-- Substituted from Config.xcconfig / Secrets.xcconfig. Empty defaults are intentional: a
+	     missing key is never a build error; Secrets.missing() names it at runtime. -->
+	<key>SaiFi</key>
+	<dict>
+		<key>GeminiApiKey</key>
+		<string>$(GEMINI_API_KEY)</string>
+		<key>SaiApiUrl</key>
+		<string>$(SAI_API_URL)</string>
+		<key>SaiVersionTag</key>
+		<string>$(SAI_VERSION_TAG)</string>
+		<key>FirebaseAppId</key>
+		<string>$(FIREBASE_APP_ID)</string>
+		<key>FirebaseApiKey</key>
+		<string>$(FIREBASE_API_KEY)</string>
+		<key>FirebaseProjectId</key>
+		<string>$(FIREBASE_PROJECT_ID)</string>
+		<key>FirebaseGcmSenderId</key>
+		<string>$(FIREBASE_GCM_SENDER_ID)</string>
+		<key>IosClientId</key>
+		<string>$(IOS_CLIENT_ID)</string>
+		<key>WebClientId</key>
+		<string>$(WEB_CLIENT_ID)</string>
 	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
+		<!-- OURS. There is no iOS analogue of Android's foreground service; a continuously active
+		     AVAudioSession plus this mode is what keeps a call alive when the phone is pocketed.
+		     Without it iOS suspends the app and the call dies silently. -->
+		<string>audio</string>
+		<!-- The DAT sample's three. -->
 		<string>processing</string>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+	</array>
+	<!-- The SDK uses canOpenURL to detect and open Meta AI, which iOS refuses unless the scheme is
+	     declared here. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>fb-viewapp</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Needed to connect to Meta AI Glasses</string>
@@ -65,6 +119,14 @@
 		<string>_bonjour._tcp</string>
 	</array>
 	<!-- End required section for Device Access Toolkit Apps -->
+	<!-- OURS. The glasses mic arrives over Bluetooth HFP, which is still a microphone as far as iOS
+	     is concerned, so this gates the whole voice half. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sai listens through your glasses so you can talk to it hands-free.</string>
+	<!-- OURS. Asked ONCE, at sign-in — never per call and never mid-conversation, because a system
+	     dialog is unanswerable by someone whose eyes and hands are busy. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Sai includes your rough location when a task needs to know where you are.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>This app needs access to save photos captured from your glasses.</string>
 	<key>NSCameraUsageDescription</key>
