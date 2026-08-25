@@ -19,13 +19,37 @@
 import SwiftUI
 
 struct DebugMenuView: View {
-  var debugMenuViewModel: DebugMenuViewModel
+  @Bindable var debugMenuViewModel: DebugMenuViewModel
 
   var body: some View {
     HStack {
       Spacer()
-      VStack {
+      VStack(spacing: 12) {
         Spacer()
+        Button {
+          debugMenuViewModel.showHfpSpike = true
+        } label: {
+          Image(systemName: "waveform.circle.fill")
+            .foregroundStyle(.white)
+            .padding()
+            .background(.secondary)
+            .clipShape(Circle())
+            .shadow(radius: 4)
+        }
+        .accessibilityIdentifier("hfp_spike_button")
+
+        Button {
+          debugMenuViewModel.showLiveHarness = true
+        } label: {
+          Image(systemName: "antenna.radiowaves.left.and.right.circle.fill")
+            .foregroundStyle(.white)
+            .padding()
+            .background(.secondary)
+            .clipShape(Circle())
+            .shadow(radius: 4)
+        }
+        .accessibilityIdentifier("live_harness_button")
+
         Button(action: {
           debugMenuViewModel.showDebugMenu = true
         }) {
@@ -39,6 +63,12 @@ struct DebugMenuView: View {
         Spacer()
       }
       .padding(.trailing)
+    }
+    .sheet(isPresented: $debugMenuViewModel.showHfpSpike) {
+      HfpSpikeView()
+    }
+    .sheet(isPresented: $debugMenuViewModel.showLiveHarness) {
+      LiveHarnessView()
     }
   }
 }
