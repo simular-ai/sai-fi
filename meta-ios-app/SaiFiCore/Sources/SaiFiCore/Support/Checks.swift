@@ -104,6 +104,7 @@ public func allChecks(fixtures: ParityFixtures = .fromSourceTree()) -> [Check] {
   checks += voiceProfileChecks()
   checks += policyChecks()
   checks += liveTurnGateChecks()
+  checks += remainingPureChecks()
   return checks
 }
 
