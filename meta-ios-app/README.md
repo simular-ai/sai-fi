@@ -18,6 +18,7 @@ from the Android one.
 | `SaiFiCore/` | The pure half — FSM, protocol, activity log, AgentEventRouter, VoiceConverters, LiveTurnGate, VoiceProfile, every pure policy. **410 checks passing** (`swift run saifi-check`) |
 | `SaiFi.xcodeproj` | Seeded from the CameraAccess sample, renamed, Info.plist / xcconfig / Secrets wired, SaiFiCore linked as a local package. Compiles for generic iOS without signing; Simulator tests run on iPhone 17 / iOS 27 |
 | `SaiFi/Glasses/` | `GlassesGestureSession` + `GlassesCamera`. MockDeviceKit on iPhone 17: a second `DeviceSession` is refused, so capture attaches to the gesture session; `stream.stop()` then `addStream` still delivers frames. 7/7 `MockDeviceTests` green |
+| `SaiFi/Support/` | Prefs (same keys as Android), PhoneLocation (one-shot, never streamed), Theme tokens, ended-reason notification. Sign-in / CallCoordinator / screens not written yet |
 | Everything else | Not written yet — audio, Gemini Live client, agent HTTP, UI |
 
 The check registry is pinned at ≥410 in `GateTests` so a shrinking catalog cannot go green quietly.
