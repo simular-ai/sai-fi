@@ -23,6 +23,8 @@ enum SaiAuth {
   static var isConfigured: Bool { Secrets.firebaseConfigured }
 
   /// Initialize Firebase from xcconfig. Idempotent; no-op if unconfigured.
+  /// Never call `FirebaseApp.configure` with an Android app id — the SDK raises
+  /// `com.firebase.core` and the process dies before the sign-in screen appears.
   static func initialize() {
     guard isConfigured, FirebaseApp.app() == nil else {
       configureGoogleSignIn()

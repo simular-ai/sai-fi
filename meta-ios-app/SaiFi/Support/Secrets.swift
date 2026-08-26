@@ -52,9 +52,16 @@ public enum Secrets {
 
   // ── diagnosis ──────────────────────────────────────────────────────────────
 
-  /// Whether Google sign-in can work at all. Four values, all required.
+  /// Firebase's iOS SDK traps on `configure` if `GOOGLE_APP_ID` is an Android id
+  /// (`1:…:android:…`). Copied `local.properties` values are not enough.
+  public static var firebaseAppIDIsIOS: Bool {
+    firebaseAppID.contains(":ios:")
+  }
+
+  /// Whether Google sign-in can work at all. Four values, all required — and the app id must
+  /// be the **iOS** one, or `FirebaseApp.configure` kills the process.
   public static var firebaseConfigured: Bool {
-    !firebaseAppID.isEmpty && !firebaseApiKey.isEmpty && !firebaseProjectID.isEmpty
+    firebaseAppIDIsIOS && !firebaseApiKey.isEmpty && !firebaseProjectID.isEmpty
       && !webClientID.isEmpty
   }
 
@@ -63,7 +70,7 @@ public enum Secrets {
     var absent: [String] = []
     if geminiApiKey.isEmpty { absent.append("gemini_api_key") }
     if saiApiUrl.isEmpty { absent.append("sai_api_url") }
-    if firebaseAppID.isEmpty { absent.append("firebase_app_id") }
+    if !firebaseAppIDIsIOS { absent.append("firebase_app_id (iOS)") }
     if firebaseApiKey.isEmpty { absent.append("firebase_api_key") }
     if firebaseProjectID.isEmpty { absent.append("firebase_project_id") }
     if webClientID.isEmpty { absent.append("web_client_id") }
