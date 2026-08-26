@@ -16,6 +16,7 @@ func remainingPureChecks() -> [Check] {
     + saiTabChecks()
     + glassesLinkChecks()
     + cloudApiHeaderChecks()
+    + agentLinkChecks()
 }
 
 /// Round-trip through JSONSerialization so Swift `true` becomes a real JSON boolean.

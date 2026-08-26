@@ -26,8 +26,8 @@ public struct CheckFailure: Sendable {
 /// One registered check: a name, and a body that returns a failure reason or nil.
 public struct Check: Sendable {
   public let name: String
-  public let run: @Sendable () async -> String?
-  public init(name: String, run: @escaping @Sendable () async -> String?) {
+  public let run: @Sendable () async throws -> String?
+  public init(name: String, run: @escaping @Sendable () async throws -> String?) {
     self.name = name
     self.run = run
   }
@@ -105,6 +105,7 @@ public func allChecks(fixtures: ParityFixtures = .fromSourceTree()) -> [Check] {
   checks += policyChecks()
   checks += liveTurnGateChecks()
   checks += remainingPureChecks()
+  checks += conversationChecks()
   return checks
 }
 
@@ -115,8 +116,12 @@ public func checkCount(fixtures: ParityFixtures = .fromSourceTree()) -> Int {
 public func runAllChecks(fixtures: ParityFixtures = .fromSourceTree()) async -> [CheckFailure] {
   var failures: [CheckFailure] = []
   for check in allChecks(fixtures: fixtures) {
-    if let detail = await check.run() {
-      failures.append(CheckFailure(name: check.name, detail: detail))
+    do {
+      if let detail = try await check.run() {
+        failures.append(CheckFailure(name: check.name, detail: detail))
+      }
+    } catch {
+      failures.append(CheckFailure(name: check.name, detail: String(describing: error)))
     }
   }
   return failures

@@ -105,10 +105,12 @@ The same architecture, in `meta-ios-app/`. `SaiFiCore/` is Foundation-only (FSM,
 
 | Module | Role |
 | --- | --- |
-| `SaiFiCore/` | Pure half. Gate: `swift run saifi-check`. |
+| `SaiFiCore/` | Pure half. Gate: `swift run saifi-check` (471 checks, including the conversation harness). |
 | `GlassesGestureSession` / `GlassesCamera` | DAT session + still capture. iOS 0.8: one session only; `stream.stop()` then `addStream` reuses the slot. |
 | `Prefs` / `PhoneLocation` / `Theme` / `CallNotifications` | Same keys, one-shot location, Sai tokens, ended-reason banner only (no ongoing-call notification). |
-| Audio / Gemini Live / agent HTTP / UI | In progress on sibling branches. |
+| Audio / Gemini Live | In the Xcode target. HFP duplex unverified on hardware. |
+| Agent HTTP | In SaiFiCore (`HttpAgentBridge`, `VoiceChannelClient`, `VoiceSession`). Scripted harness green; live POST unverified. |
+| UI / sign-in / CallCoordinator | Not written yet. |
 
 ---
 

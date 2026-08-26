@@ -39,8 +39,12 @@ final class GateTests: XCTestCase {
 
     var failures: [String] = []
     for check in checks {
-      if let detail = await check.run() {
-        failures.append("\(check.name): \(detail)")
+      do {
+        if let detail = try await check.run() {
+          failures.append("\(check.name): \(detail)")
+        }
+      } catch {
+        failures.append("\(check.name): \(error)")
       }
     }
     XCTAssertTrue(
@@ -52,7 +56,7 @@ final class GateTests: XCTestCase {
   /// against — the same argument as `FsmGoldenTest`'s PORTED_SCENARIO_COUNT on the Android side.
   func testTheGateStillHasEveryCheck() {
     XCTAssertGreaterThanOrEqual(
-      checkCount(fixtures: fixtures), 410,
+      checkCount(fixtures: fixtures), 471,
       "the check registry shrank — a check was removed rather than fixed")
   }
 }

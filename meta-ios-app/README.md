@@ -15,13 +15,14 @@ from the Android one.
 
 | | |
 | --- | --- |
-| `SaiFiCore/` | The pure half — FSM, protocol, activity log, AgentEventRouter, VoiceConverters, LiveTurnGate, VoiceProfile, every pure policy. **410 checks passing** (`swift run saifi-check`) |
+| `SaiFiCore/` | The pure half — FSM, protocol, activity log, AgentEventRouter, VoiceConverters, LiveTurnGate, VoiceProfile, every pure policy, agent HTTP (no network), and the conversation harness. **471 checks passing** (`swift run saifi-check`) |
 | `SaiFi.xcodeproj` | Seeded from the CameraAccess sample, renamed, Info.plist / xcconfig / Secrets wired, SaiFiCore linked as a local package. Compiles for generic iOS without signing; Simulator tests run on iPhone 17 / iOS 27 |
 | `SaiFi/Glasses/` | `GlassesGestureSession` + `GlassesCamera`. MockDeviceKit on iPhone 17: a second `DeviceSession` is refused, so capture attaches to the gesture session; `stream.stop()` then `addStream` still delivers frames. 7/7 `MockDeviceTests` green |
+| `SaiFi/Call/` | `AudioIo` (16 kHz capture / 24 kHz playback, noise gate substitutes silence), `GeminiLiveClient` (`BidiGenerateContent?key=`), DEBUG HFP spike + Live harness. Simulator tests green. **HFP duplex unverified on hardware** |
 | `SaiFi/Support/` | Prefs (same keys as Android), PhoneLocation (one-shot, never streamed), Theme tokens, ended-reason notification. Sign-in / CallCoordinator / screens not written yet |
-| Everything else | Not written yet — audio, Gemini Live client, agent HTTP, UI |
+| Everything else | Not written yet — SaiAuth, CallCoordinator, screens |
 
-The check registry is pinned at ≥410 in `GateTests` so a shrinking catalog cannot go green quietly.
+The check registry is pinned at ≥471 in `GateTests` so a shrinking catalog cannot go green quietly.
 
 ## The two halves, and why they are separate packages
 
