@@ -55,6 +55,11 @@ final class AppModel {
 
   var signedIn: Bool = false
   var userEmail: String? = nil
+  #if DEBUG
+  /// Home without Firebase. `refreshAuthState` must not wipe this.
+  @ObservationIgnored private var authBypass = false
+  #endif
+  /// DEBUG: Home without Firebase. `refreshAuthState` must not wipe this.
 
   var authError: String? = nil
   var authErrorOpen: Bool = false
@@ -187,6 +192,9 @@ final class AppModel {
   }
 
   func signOut() {
+    #if DEBUG
+    authBypass = false
+    #endif
     SaiAuth.signOut()
     refreshAuthState()
     machines = []
@@ -266,7 +274,7 @@ final class AppModel {
 
   func onStartClicked() {
     clearGlassesError()
-    if !SaiAuth.isSignedIn() {
+    if !SaiAuth.isSignedIn() && !signedIn {
       showAuthError("Sign in first")
       return
     }
@@ -314,16 +322,20 @@ final class AppModel {
     clearGlassesError()
     Task {
       let token = await SaiAuth.idToken()
-      if token == nil {
+      if token == nil && SaiAuth.isSignedIn() {
         showAuthError(
           "Couldn't refresh your sign-in token, so the call can't start. Check the connection; "
             + "if it keeps failing, sign out in Settings and sign in again.")
         return
       }
+      if token == nil {
+        call.appendIdleLog(
+          "no Firebase token — Gemini can still run; agent POSTs will fail until you sign in")
+      }
       call.start(
         params: CallCoordinator.StartParams(
           baseUrl: Secrets.saiApiUrl,
-          token: token!,
+          token: token ?? "",
           machineId: m.machineId,
           machineLabel: m.label,
           machines: machines,
@@ -516,17 +528,53 @@ final class AppModel {
       userEmail = "ui-test@example.com"
       return
     }
+    if authBypass {
+      signedIn = true
+      return
+    }
     #endif
     signedIn = SaiAuth.isSignedIn()
     userEmail = SaiAuth.email()
     if signedIn { maybeAutoRequestLocation() }
   }
 
-  /// DEBUG: reach Home without Firebase, so MockDeviceKit and DAT registration can be exercised.
+  /// DEBUG: reach Home without Firebase, so MockDeviceKit and a Mac-mic Gemini call can be exercised.
   #if DEBUG
   func continueWithoutAccount() {
+    authBypass = true
     signedIn = true
     userEmail = nil
+    if machines.isEmpty {
+      let stub = Machine(
+        machineId: "simulator",
+        name: "Simulator (no agent)",
+        status: "active",
+        canWake: false)
+      machines = [stub]
+      selectedMachine = stub
+      machinesFetchOk = true
+      machinesInfo = "Voice only — sign in to load real machines"
+    }
+  }
+
+  /// MockDeviceKit just changed registration / pairing. Re-read DAT so Home isn't stuck on
+  /// "checking…" until the next scene activation.
+  func refreshAfterMockSetup() {
+    if dat == nil {
+      do {
+        try Wearables.configure()
+      } catch {
+        call.appendIdleLog("mock DAT configure: \(error.localizedDescription)")
+      }
+      startDat()
+    }
+    guard let wearables = dat else { return }
+    glassesReg = wearables.registrationState
+    Task { await refreshGlassesCameraStatus() }
+    if wearables.registrationState == .registered {
+      markGlassesCameraGranted()
+    }
+    sceneBecameActive()
   }
   #endif
 

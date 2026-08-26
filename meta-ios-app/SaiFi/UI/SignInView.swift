@@ -24,7 +24,7 @@ struct SignInView: View {
   var body: some View {
     VStack(spacing: 0) {
       Spacer()
-      Image(.cameraAccessIcon)
+      Image(.saiLogo)
         .resizable()
         .scaledToFit()
         .frame(width: 96, height: 96)
@@ -54,13 +54,17 @@ struct SignInView: View {
         .font(.footnote)
         .foregroundStyle(colors.mutedForeground)
         .multilineTextAlignment(.center)
-        #if DEBUG
-        Spacer().frame(height: 16)
-        Button("Continue without account") { app.continueWithoutAccount() }
-          .font(.subheadline.weight(.medium))
-          .foregroundStyle(colors.brand)
-        #endif
       }
+      #if DEBUG
+      Spacer().frame(height: 16)
+      Button("Continue without account") { app.continueWithoutAccount() }
+        .font(.subheadline.weight(.medium))
+        .foregroundStyle(colors.brand)
+      Text("Simulator / MockDeviceKit — Gemini still needs GEMINI_API_KEY. Agent calls need a real sign-in.")
+        .font(.caption)
+        .foregroundStyle(colors.mutedForeground)
+        .multilineTextAlignment(.center)
+      #endif
 
       Spacer().frame(height: 16)
       SectionErrorAffordance(

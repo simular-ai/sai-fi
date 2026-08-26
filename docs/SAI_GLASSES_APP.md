@@ -3,9 +3,10 @@
 The phone app that puts the Sai voice concierge on **Meta Ray-Ban glasses**. The phone
 opens a Gemini Live audio session with the user's own key, runs the conversation state machine
 itself, and talks to the Sai API only to reach the agent. The glasses are the microphone, speaker
-and camera. Android is the shipping client; iOS is the in-progress port.
-
-To verify a build on hardware, start with [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md).
+and camera. Android is the shipping client; iOS is the in-progress port. **The iOS app has not
+been tested on a physical iPhone or real Ray-Ban Meta glasses** — Simulator (MockDeviceKit) and
+`saifi-check` only. For hardware, start with [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) (Android)
+or [`IOS_ON_DEVICE_CHECK.md`](IOS_ON_DEVICE_CHECK.md) (iOS, not yet walked).
 
 The Sai API is documented at [sai.work/api](https://sai.work/api). This repo does not contain the
 server. What the client is obliged to do on the wire is
@@ -111,6 +112,7 @@ The same architecture, in `meta-ios-app/`. `SaiFiCore/` is Foundation-only (FSM,
 | `AudioIo` / `GeminiLiveClient` / `CallCoordinator` | In the Xcode target. `CallCoordinator` merges Android's CallService + CallController. HFP duplex unverified on hardware. |
 | Agent HTTP | In SaiFiCore (`HttpAgentBridge`, `VoiceChannelClient`, `VoiceSession`). Scripted harness green; live POST unverified. |
 | `SaiAuth` / `AppModel` / `SaiFi/UI/` | Google Sign-In → Firebase ID token; sign-in gate, Home, Settings, Logs. |
+| MockDeviceKit (DEBUG) | Simulator stand-in for the glasses. No Bluetooth in Simulator; **not a substitute for on-device testing**. |
 
 ---
 

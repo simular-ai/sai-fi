@@ -567,7 +567,7 @@ final class CallCoordinator {
         }
         if Secrets.geminiApiKey.isEmpty {
           // Nothing to connect with. Said plainly rather than failing as an opaque 1007 close.
-          self.log("start failed: no gemini_api_key — set it in local.properties and rebuild")
+          self.log("start failed: no gemini_api_key — set it in Secrets.xcconfig and rebuild")
           self.stopAll()
           return
         }

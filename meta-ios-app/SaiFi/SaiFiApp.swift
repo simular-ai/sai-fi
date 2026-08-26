@@ -67,11 +67,11 @@ struct SaiFiApp: App {
             if phase == .active { appModel.sceneBecameActive() }
           }
           #if DEBUG
-          .sheet(isPresented: $debugMenuViewModel.showDebugMenu) {
-            MockDeviceKitView(viewModel: debugMenuViewModel.mockDeviceKitViewModel)
-          }
-          .overlay {
-            DebugMenuView(debugMenuViewModel: debugMenuViewModel)
+          .overlay(alignment: .bottomTrailing) {
+            DebugMenuView(
+              debugMenuViewModel: debugMenuViewModel,
+              onMockGlassesChanged: { appModel.refreshAfterMockSetup() }
+            )
           }
           #endif
       }

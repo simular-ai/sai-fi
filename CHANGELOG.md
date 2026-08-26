@@ -13,9 +13,10 @@ voice-profile and FSM contract are stable.
 - iOS port in `meta-ios-app/`: SaiFiCore (FSM, protocol, 471-check gate), DAT glasses session and
   capture, AudioIo + Gemini Live, the agent link, Google Sign-In / Firebase, CallCoordinator, and
   the four-screen shell. App privacy manifest declares UserDefaults and system-boot-time access.
-  Not yet verified on hardware: HFP duplex, live agent POST, Meta AI registration. The App Store
-  remains closed (MFi); internal TestFlight is the path. See `meta-ios-app/README.md` and
-  `docs/IOS_ON_DEVICE_CHECK.md`.
+  Simulator testing uses MockDeviceKit (**Set up Simulator glasses**); there is no Bluetooth in the
+  Simulator. **Not tested on a physical iPhone or real glasses:** HFP duplex, live agent POST, Meta
+  AI registration. The App Store remains closed (MFi); internal TestFlight is the path. See
+  `meta-ios-app/README.md` and `docs/IOS_ON_DEVICE_CHECK.md`.
 
 ## [0.1.0] — 2026-08-21
 

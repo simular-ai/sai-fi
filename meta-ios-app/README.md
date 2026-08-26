@@ -11,7 +11,9 @@ from the Android one.
 
 ## Status
 
-**In progress.** What is real and verified today:
+**In progress. Not tested on a physical iPhone or real Ray-Ban Meta glasses.** Simulator +
+`saifi-check` are the verification so far. HFP duplex, Meta AI registration, and a live agent POST
+need hardware and accounts.
 
 | | |
 | --- | --- |
@@ -20,7 +22,7 @@ from the Android one.
 | `SaiFi/Glasses/` | `GlassesGestureSession` + `GlassesCamera`. MockDeviceKit on iPhone 17: a second `DeviceSession` is refused, so capture attaches to the gesture session; `stream.stop()` then `addStream` still delivers frames. 7/7 `MockDeviceTests` green |
 | `SaiFi/Call/` | `AudioIo`, `GeminiLiveClient`, `CallCoordinator` (Android `CallService` + `CallController` merged). Simulator tests green. **HFP duplex unverified on hardware** |
 | `SaiFi/Support/` + `SaiFi/UI/` | Prefs, PhoneLocation, Theme, ended-reason notification, `SaiAuth`, the four screens (sign-in gate, Home, Settings, Logs). CameraAccess sample UI is no longer the user-facing app |
-| Live Gemini / live agent / Meta AI registration | Need keys and a phone. Not verified in-tree |
+| Live Gemini / live agent / Meta AI registration | Need keys and a phone. **Not verified on-device** |
 
 The check registry is pinned at ≥471 in `GateTests` so a shrinking catalog cannot go green quietly.
 
@@ -41,19 +43,31 @@ match the goldens.
 
 ### 2. Simulator — no glasses, no Bluetooth
 
+The iOS Simulator **cannot** talk to a real pair of Ray-Ban Meta glasses. There is no host Bluetooth
+passthrough, and Meta AI (the companion) is a physical-device app. The stand-in is Meta's
+**MockDeviceKit**, already linked in this target.
+
 Copy [`Secrets.xcconfig.example`](Secrets.xcconfig.example) to `Secrets.xcconfig` and fill in at
-least `GEMINI_API_KEY`. Firebase keys are required for a real sign-in; without them a DEBUG build
-offers **Continue without account** so you can still reach Home.
+least `GEMINI_API_KEY`. Firebase keys are required for a real sign-in; Google Sign-In also needs an
+**iOS** OAuth client (`IOS_CLIENT_ID` / `REVERSED_CLIENT_ID`), which is not the Android one. Without
+those, a DEBUG build offers **Continue without account** so you can still reach Home and start a
+Mac-mic Gemini call. Agent POSTs will 401 until you sign in.
 
 ```bash
 export DEVELOPER_DIR=/Users/jamielim/Downloads/Xcode-beta.app/Contents/Developer   # if using the beta
 open SaiFi.xcodeproj
 ```
 
-Run on **iPhone 17 / iOS 27**. The DEBUG overlay (bottom-leading) opens MockDeviceKit: pair a fake
-device, drive temple gestures (`captouch.tap()` / `tapAndHold()`), feed video from an HEVC file or
-the Mac's camera. The Mac's mic and speakers are a real Gemini Live conversation if the key is set.
-HFP will **not** appear — there is no Bluetooth in the Simulator — so the Audio line stays `phone`.
+Run on **iPhone 17 / iOS 27**. DEBUG overlay, **bottom-right**:
+
+| Button | What it is |
+| --- | --- |
+| **Mock glasses** (ladybug) | MockDeviceKit. Tap **Set up Simulator glasses** — fakes DAT registration, pairs a Ray-Ban Meta, powers/unfolds/dons it, and plants `plant.mp4` / `plant.png` so capture has a still. Temple **Tap** = mute, **Tap & Hold** = end call. |
+| **Live harness** (antenna) | Gemini Live + Mac mic, no FSM. Useful if you only want to hear the model. |
+| **HFP spike** (waveform) | Duplex audio probe. **No Bluetooth in Simulator**, so this always uses the Mac mic; run it on a phone with glasses. |
+
+Then: Continue without account (or Sign in) → Home → Start. Audio line stays `phone`. That is the
+whole Simulator loop. It does **not** prove HFP, Meta AI registration, or a live agent.
 
 Unit tests. DAT `Wearables.configure()` is process-global, so parallel clones crash — keep it serial:
 

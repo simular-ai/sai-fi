@@ -1,68 +1,47 @@
-/*
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- * All rights reserved.
- *
- * This source code is licensed under the license found in the
- * LICENSE file in the root directory of this source tree.
- */
-
-//
-// DebugMenuView.swift
-//
-// Debug-only overlay that provides access to mock device functionality during development.
-// This view demonstrates how to integrate mock devices for testing DAT SDK features
-// without requiring physical Meta wearable devices.
-//
-
 #if DEBUG
 
+import MWDATMockDevice
 import SwiftUI
 
+/// DEBUG overlay. Three buttons, trailing edge:
+///   • ladybug — MockDeviceKit (the Simulator stand-in for Ray-Ban Meta glasses)
+///   • antenna — Gemini Live harness (Mac mic, no FSM)
+///   • waveform — HFP duplex spike (meant for a real phone; no Bluetooth here)
 struct DebugMenuView: View {
   @Bindable var debugMenuViewModel: DebugMenuViewModel
+  var onMockGlassesChanged: () -> Void
 
   var body: some View {
-    HStack {
-      Spacer()
-      VStack(spacing: 12) {
-        Spacer()
-        Button {
-          debugMenuViewModel.showHfpSpike = true
-        } label: {
-          Image(systemName: "waveform.circle.fill")
-            .foregroundStyle(.white)
-            .padding()
-            .background(.secondary)
-            .clipShape(Circle())
-            .shadow(radius: 4)
-        }
-        .accessibilityIdentifier("hfp_spike_button")
-
-        Button {
-          debugMenuViewModel.showLiveHarness = true
-        } label: {
-          Image(systemName: "antenna.radiowaves.left.and.right.circle.fill")
-            .foregroundStyle(.white)
-            .padding()
-            .background(.secondary)
-            .clipShape(Circle())
-            .shadow(radius: 4)
-        }
-        .accessibilityIdentifier("live_harness_button")
-
-        Button(action: {
-          debugMenuViewModel.showDebugMenu = true
-        }) {
-          Image(systemName: "ladybug.fill")
-            .foregroundStyle(.white)
-            .padding()
-            .background(.secondary)
-            .clipShape(Circle())
-            .shadow(radius: 4)
-        }.accessibilityIdentifier("debug_menu_button")
-        Spacer()
+    VStack(spacing: 10) {
+      debugButton(
+        system: "ladybug.fill",
+        title: "Mock glasses",
+        identifier: "debug_menu_button"
+      ) {
+        debugMenuViewModel.showDebugMenu = true
       }
-      .padding(.trailing)
+      debugButton(
+        system: "antenna.radiowaves.left.and.right.circle.fill",
+        title: "Live harness",
+        identifier: "live_harness_button"
+      ) {
+        debugMenuViewModel.showLiveHarness = true
+      }
+      debugButton(
+        system: "waveform.circle.fill",
+        title: "HFP spike",
+        identifier: "hfp_spike_button"
+      ) {
+        debugMenuViewModel.showHfpSpike = true
+      }
+    }
+    .padding(.trailing, 12)
+    .padding(.bottom, 24)
+    .sheet(isPresented: $debugMenuViewModel.showDebugMenu, onDismiss: onMockGlassesChanged) {
+      MockDeviceKitView(
+        viewModel: debugMenuViewModel.mockDeviceKitViewModel,
+        onGlassesChanged: onMockGlassesChanged
+      )
     }
     .sheet(isPresented: $debugMenuViewModel.showHfpSpike) {
       HfpSpikeView()
@@ -70,6 +49,34 @@ struct DebugMenuView: View {
     .sheet(isPresented: $debugMenuViewModel.showLiveHarness) {
       LiveHarnessView()
     }
+  }
+
+  private func debugButton(
+    system: String,
+    title: String,
+    identifier: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      VStack(spacing: 2) {
+        Image(systemName: system)
+          .font(.title2)
+          .foregroundStyle(.white)
+          .frame(width: 44, height: 44)
+          .background(Color.accentColor)
+          .clipShape(Circle())
+          .shadow(radius: 4)
+        Text(title)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.primary)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          .background(.thinMaterial, in: Capsule())
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
+    .accessibilityIdentifier(identifier)
   }
 }
 

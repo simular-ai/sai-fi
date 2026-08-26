@@ -35,7 +35,9 @@ extension MockDeviceKitView {
     }
 
     func enable() {
-      mockDeviceKit.enable()
+      mockDeviceKit.enable(
+        config: MockDeviceKitConfig(initiallyRegistered: true, initialPermissionsGranted: true)
+      )
       isEnabled = true
     }
 
@@ -43,6 +45,23 @@ extension MockDeviceKitView {
       mockDeviceKit.disable()
       cardViewModels = []
       isEnabled = false
+    }
+
+    /// One tap for the Simulator: fake registration, pair Ray-Ban Meta, wear them, plant the
+    /// bundled plant.mp4 / plant.png so capture has a still. No Bluetooth involved.
+    func setupSimulatorGlasses() {
+      if !isEnabled { enable() }
+      if cardViewModels.isEmpty { pairGlasses() }
+      guard let card = cardViewModels.last else { return }
+      card.powerOn()
+      card.unfold()
+      card.don()
+      if let video = Bundle.main.url(forResource: "plant", withExtension: "mp4") {
+        card.selectVideo(from: video)
+      }
+      if let image = Bundle.main.url(forResource: "plant", withExtension: "png") {
+        card.selectImage(from: image)
+      }
     }
 
     // Add a new mock Ray-Ban Meta device

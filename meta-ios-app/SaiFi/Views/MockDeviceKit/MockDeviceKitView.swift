@@ -21,6 +21,7 @@ import SwiftUI
 
 struct MockDeviceKitView: View {
   var viewModel: ViewModel
+  var onGlassesChanged: () -> Void = {}
 
   var body: some View {
     NavigationView {
@@ -42,7 +43,10 @@ struct MockDeviceKitView: View {
                 }
               }
 
-              Text("This screen handles simulating devices, mocking capabilities, and states")
+              Text(
+                "Simulator has no Bluetooth. This kit is the glasses: Enable (or Set up), "
+                  + "then Home can register/capture against the mock. Audio stays on the Mac mic."
+              )
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -52,14 +56,26 @@ struct MockDeviceKitView: View {
               if viewModel.isEnabled {
                 MockDeviceKitButton("Disable MockDeviceKit", style: .destructive) {
                   viewModel.disable()
+                  onGlassesChanged()
+                }
+
+                MockDeviceKitButton("Set up Simulator glasses") {
+                  viewModel.setupSimulatorGlasses()
+                  onGlassesChanged()
                 }
 
                 MockDeviceKitButton("Pair RayBan Meta", disabled: viewModel.cardViewModels.count >= 3) {
                   viewModel.pairGlasses()
+                  onGlassesChanged()
                 }
               } else {
                 MockDeviceKitButton("Enable MockDeviceKit") {
                   viewModel.enable()
+                  onGlassesChanged()
+                }
+                MockDeviceKitButton("Set up Simulator glasses") {
+                  viewModel.setupSimulatorGlasses()
+                  onGlassesChanged()
                 }
               }
             }
@@ -72,6 +88,7 @@ struct MockDeviceKitView: View {
                 viewModel: cardViewModel,
                 onUnpairDevice: {
                   viewModel.unpairDevice(cardViewModel.device)
+                  onGlassesChanged()
                 }
               )
             }

@@ -1,5 +1,9 @@
 # On-device check — iOS
 
+**This checklist has not been run on a physical iPhone or real glasses yet.** The iOS port is
+verified in the Simulator (MockDeviceKit) and by `swift run saifi-check`. Until someone walks this
+file on hardware, do not treat HFP duplex, Meta AI registration, or a live agent POST as proven.
+
 The same ten checks as [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md), for the iOS client in
 `meta-ios-app/`. Behaviour, wording, and failure modes are identical; only the build, the secrets
 file, the log surface, and a handful of platform facts change. Run this after any change that
