@@ -237,7 +237,25 @@ sealed interface Step {
 
   data class AdvanceMs(val ms: Long) : Step
 
-  /** Escape hatch for anything the shapes above can't express. */
+  /**
+   * A glasses capture landing on the bridge stash, waiting for whatever writes next.
+   *
+   * Declarative rather than a [Do] block so the catalog can be SERIALISED — see
+   * `FsmScenarioFixtures.kt`. The iOS port replays the same steps from JSON, and a Kotlin lambda
+   * cannot cross that boundary.
+   */
+  data class AddPhoto(val name: String) : Step
+
+  /** From here on the immediate forward fails — the machine is unreachable, or the write is rejected. */
+  data object FailNextForward : Step
+
+  /**
+   * Escape hatch for anything the shapes above can't express.
+   *
+   * Deliberately UNSERIALISABLE, and `FsmScenarioFixtures` throws on one rather than skipping it: a
+   * scenario that cannot cross to the other port should fail loudly here, not go quietly missing from
+   * the iOS gate.
+   */
   data class Do(val block: suspend (GoldenCtx) -> Unit) : Step
 }
 

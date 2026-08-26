@@ -5,9 +5,9 @@ find the thing you care about without reading the whole tree. For *why* the app 
 way, read [`SAI_GLASSES_APP.md`](SAI_GLASSES_APP.md); for the *wire contract* it must honour,
 read [`CONCIERGE_CLIENT_PROTOCOL.md`](CONCIERGE_CLIENT_PROTOCOL.md).
 
-**One sentence on the app:** an Android app that puts a voice concierge on Meta Ray-Ban glasses — it
+**One sentence on the app:** a phone app that puts a voice concierge on Meta Ray-Ban glasses — it
 opens a Gemini Live audio session directly with the user's own key, runs the conversation's state
-machine itself, and talks to the Sai API only to reach the agent.
+machine itself, and talks to the Sai API only to reach the agent. Android ships; iOS is in `meta-ios-app (untested on-device)/`.
 
 ## Where to start reading
 
@@ -29,9 +29,11 @@ machine itself, and talks to the Sai API only to reach the agent.
 | `LICENSE` | Licence for this repo (Meta attribution included). |
 | `licenses/` | The two bundled font licences (Manrope, JetBrains Mono). |
 | `docs/` | This folder — the Markdown docs described below. |
-| `meta-android-app/` | **The app.** A standalone Kotlin/Gradle Android project. |
+| `meta-android-app/` | **The Android app.** A standalone Kotlin/Gradle project. |
+| `meta-ios-app (untested on-device)/` | **The iOS port** (in progress). Local SwiftPM package `SaiFiCore/` is the pure half; the Xcode app target holds DAT / audio / UI. |
 | `presenter/` | A tiny Node/TypeScript demo dashboard (DEBUG-only spectator feed). |
 | `.github/workflows/android.yml` | CI: builds the app and runs the JVM unit tests. |
+| `.github/workflows/ios.yml` | CI: SaiFiCore gate (`saifi-check`) plus unsigned generic-iOS compile. |
 
 ## docs/
 
@@ -40,6 +42,7 @@ machine itself, and talks to the Sai API only to reach the agent.
 | `SAI_GLASSES_APP.md` | The architecture overview — read this first. |
 | `CONCIERGE_CLIENT_PROTOCOL.md` | The client half of the wire contract (endpoints, the device tools). |
 | `ON_DEVICE_CHECK.md` | A runnable checklist for verifying a build on real glasses — ten checks, each naming what it exercises and how it fails. |
+| `IOS_ON_DEVICE_CHECK.md` | The same ten checks for the iOS client. **Not yet walked on hardware.** Simulator vs glasses, `Secrets.xcconfig`, `saifi://`, one DAT app per Meta account. |
 | `ON_DEVICE_DEMO_FLOW.md` | The same ten checks as a spoken script. |
 | `VOICE_FSM.md` | The design of the conversation state machine this app owns — modes, effects, the admission rule, the races, and why each rule exists. Read before changing anything under `fsm/`. |
 | `DIRECTORY.md` | This file. |

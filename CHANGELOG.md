@@ -8,6 +8,17 @@ voice-profile and FSM contract are stable.
 
 ## [Unreleased]
 
+### Added
+
+- iOS port in `meta-ios-app (untested on-device)/`: SaiFiCore (FSM, protocol, 471-check gate), DAT glasses session and
+  capture, AudioIo + Gemini Live, the agent link, Google Sign-In / Firebase, CallCoordinator, and
+  the four-screen shell. App privacy manifest declares UserDefaults and system-boot-time access.
+  Simulator testing uses MockDeviceKit (**Set up Simulator glasses**); there is no Bluetooth in the
+  Simulator. A Gemini-only call (Continue without account) stays up when the agent 401s — it must
+  not hang up with "Voice access was denied." **Not tested on a physical iPhone or real glasses:**
+  HFP duplex, live agent POST, Meta AI registration. The App Store remains closed (MFi); internal
+  TestFlight is the path. See `meta-ios-app (untested on-device)/README.md` and `docs/IOS_ON_DEVICE_CHECK.md`.
+
 ## [0.1.0] — 2026-08-21
 
 First public release.

@@ -60,6 +60,8 @@ class FsmGoldenTest(private val scenario: Scenario) {
         }
         is Step.Effects -> concierge.applyClientEffects(step.raw)
         is Step.AdvanceMs -> timer.advance(step.ms)
+        is Step.AddPhoto -> agent.addPendingAttachment(photo(step.name))
+        is Step.FailNextForward -> agent.failForwardTask()
         is Step.Do -> step.block(ctx)
       }
     }

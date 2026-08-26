@@ -51,3 +51,14 @@ dist/
 
 # macOS
 .DS_Store
+
+# ── iOS (meta-ios-app (untested on-device)) ────────────────────────────────────
+# The filled-in secrets file, never the example beside it.
+meta-ios-app (untested on-device)/Secrets.xcconfig
+!meta-ios-app (untested on-device)/Secrets.xcconfig.example
+# Xcode and SwiftPM build state.
+meta-ios-app (untested on-device)/**/.build/
+meta-ios-app (untested on-device)/**/*.xcuserdatad
+meta-ios-app (untested on-device)/**/xcuserdata/
+meta-ios-app (untested on-device)/**/DerivedData/
+meta-ios-app (untested on-device)/**/.swiftpm/

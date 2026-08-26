@@ -1,0 +1,60 @@
+name: ios
+
+# The iOS counterpart of `.github/workflows/android.yml`. Two jobs, because the two halves of the
+# app have different toolchain needs:
+#
+#   * `core` is the conversation gate — SaiFiCore, Foundation-only, no Xcode, no simulator, no
+#     secret. This is the Android↔iOS parity check (string goldens, 63-scenario FSM catalog, the
+#     pure policies). It is what must stay green.
+#   * `app` compiles the Xcode target against the DAT SDK for generic iOS, unsigned. It does not
+#     boot a simulator. The iOS SDK is a public SPM package, so unlike Android this job needs no
+#     `DAT_PACKAGES_TOKEN`.
+#
+# What it does NOT prove: anything about audio, the camera, the glasses, or the SwiftUI shell.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: SaiFiCore gate
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      # `swift run saifi-check` is the entry point that needs no XCTest, so it still works if a
+      # runner has only Command Line Tools. `swift test` is the same checks under XCTest, which is
+      # what Xcode CI would run. Both walk one registry; asserting both is cheap and catches a
+      # registry that only one of them can see.
+      - name: Run the gate
+        working-directory: "meta-ios-app (untested on-device)/SaiFiCore"
+        run: |
+          swift run saifi-check
+          swift test --filter GateTests
+
+  app:
+    name: compile the app (unsigned)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compile for generic iOS, no signing
+        working-directory: "meta-ios-app (untested on-device)"
+        run: |
+          xcodebuild \
+            -project SaiFi.xcodeproj \
+            -scheme SaiFi \
+            -destination 'generic/platform=iOS' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build

@@ -364,10 +364,9 @@ val GOLDEN_SCENARIOS: List<Scenario> =
             guards = "warns before a pending request expires",
             steps =
                 listOf(
-                    Step.Do { ctx ->
-                      ctx.concierge.handleAgentEvent(
-                          approval("ap5", expiresAt = ctx.timer.now + 25_000))
-                    },
+                    // The virtual clock starts at 0 and nothing has moved it yet, so an absolute
+                    // 25s IS "25s from now" — stated absolutely so the step can be serialised.
+                    Step.Agent(approval("ap5", expiresAt = 25_000)),
                     Step.AdvanceMs(5_000), // lead is 20s → fires ~5s in
                 ),
             assert = { ctx -> assertTrue(ctx.spokenHas("about to time out")) },
@@ -781,9 +780,9 @@ val GOLDEN_SCENARIOS: List<Scenario> =
             steps =
                 listOf(
                     effects(effect("forwardToAgent", "text" to "check my email")),
-                    Step.Do { ctx -> ctx.agent.addPendingAttachment(photo("kettle.jpg")) },
+                    Step.AddPhoto("kettle.jpg"),
                     effects(effect("forwardToAgent", "text" to "what is this thing")),
-                    Step.Do { ctx -> ctx.agent.addPendingAttachment(photo("receipt.jpg")) },
+                    Step.AddPhoto("receipt.jpg"),
                     Step.Agent(AgentEvent.Complete("inbox clear")),
                 ),
             assert = { ctx ->
@@ -1130,7 +1129,7 @@ val GOLDEN_SCENARIOS: List<Scenario> =
             guards = "the immediate path fails too, and it is the common one — S48 only covered the held path",
             steps =
                 listOf(
-                    Step.Do { ctx -> ctx.agent.failForwardTask() },
+                    Step.FailNextForward,
                     effects(effect("forwardToAgent", "text" to "check my unread emails")),
                 ),
             assert = { ctx ->
