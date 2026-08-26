@@ -46,10 +46,12 @@ struct HomeView: View {
           Text(
             "Glasses: "
               + {
+                // Xcode 16.4 (CI) does not treat `case true/false/nil` as exhaustive
+                // on Bool? — it wants Optional's own cases.
                 switch app.glassesLinked {
-                case true: "connected"
-                case false: "not connected"
-                case nil: "checking…"
+                case .some(true): "connected"
+                case .some(false): "not connected"
+                case .none: "checking…"
                 }
               }()
           )

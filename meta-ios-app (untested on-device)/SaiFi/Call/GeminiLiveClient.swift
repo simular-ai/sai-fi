@@ -177,6 +177,14 @@ public final class GeminiLiveClient: @unchecked Sendable {
   private let session: URLSession
   private let hook: SocketHook
   private let lock = NSLock()
+  /// Sync helper so `NSLock.lock` is never called from an `async` function body.
+  /// (That is a warning on Xcode 16 / an error in Swift 6 language mode.)
+  private func withLock<T>(_ body: () -> T) -> T {
+    lock.lock()
+    defer { lock.unlock() }
+    return body()
+  }
+
   private var ws: URLSessionWebSocketTask?
   private var generation = 0
   private var closedNotified = false
@@ -278,16 +286,17 @@ public final class GeminiLiveClient: @unchecked Sendable {
     }
 
     run(gate.onConnect())
-    lock.lock()
-    generation += 1
-    let gen = generation
-    closedNotified = false
-    ws?.cancel(with: .goingAway, reason: nil)
-    receiveTask?.cancel()
-    pingTask?.cancel()
-    let task = session.webSocketTask(with: url)
-    ws = task
-    lock.unlock()
+    let (gen, task) = withLock { () -> (Int, URLSessionWebSocketTask) in
+      generation += 1
+      let gen = generation
+      closedNotified = false
+      ws?.cancel(with: .goingAway, reason: nil)
+      receiveTask?.cancel()
+      pingTask?.cancel()
+      let task = session.webSocketTask(with: url)
+      ws = task
+      return (gen, task)
+    }
 
     pendingSetup = GeminiLiveWire.jsonString(GeminiLiveWire.setupObject(boot))
     task.resume()
@@ -334,31 +343,27 @@ public final class GeminiLiveClient: @unchecked Sendable {
 
   public func close() {
     gate.onClose()
-    lock.lock()
-    generation += 1
-    ws?.cancel(with: .normalClosure, reason: nil)
-    ws = nil
-    receiveTask?.cancel()
-    pingTask?.cancel()
-    receiveTask = nil
-    pingTask = nil
-    lock.unlock()
+    withLock {
+      generation += 1
+      ws?.cancel(with: .normalClosure, reason: nil)
+      ws = nil
+      receiveTask?.cancel()
+      pingTask?.cancel()
+      receiveTask = nil
+      pingTask = nil
+    }
   }
 
   // ── Socket I/O ─────────────────────────────────────────────────────────────
 
   private func send(_ text: String) {
-    lock.lock()
-    let task = ws
-    lock.unlock()
+    let task = withLock { ws }
     task?.send(.string(text)) { _ in }
   }
 
   private func receiveLoop(_ task: URLSessionWebSocketTask, generation gen: Int) async {
     while !Task.isCancelled {
-      lock.lock()
-      let current = generation
-      lock.unlock()
+      let current = withLock { generation }
       guard current == gen else { return }
       do {
         let message = try await task.receive()
@@ -370,9 +375,7 @@ public final class GeminiLiveClient: @unchecked Sendable {
         }
         if !raw.isEmpty { handle(task, raw) }
       } catch {
-        lock.lock()
-        let still = generation == gen
-        lock.unlock()
+        let still = withLock { generation == gen }
         if still && !Task.isCancelled {
           log.error("live socket failure \(error.localizedDescription, privacy: .public)")
           onLog("live: FAILED  \(error.localizedDescription)")
@@ -390,20 +393,19 @@ public final class GeminiLiveClient: @unchecked Sendable {
       } catch {
         return
       }
-      lock.lock()
-      let still = generation == gen && ws === task
-      lock.unlock()
+      let still = withLock { generation == gen && ws === task }
       guard still else { return }
       task.sendPing { _ in }
     }
   }
 
   fileprivate func socketDidOpen(_ task: URLSessionWebSocketTask) {
-    lock.lock()
-    let live = ws === task
-    let setup = pendingSetup
-    pendingSetup = nil
-    lock.unlock()
+    let (live, setup) = withLock { () -> (Bool, String?) in
+      let live = ws === task
+      let setup = pendingSetup
+      pendingSetup = nil
+      return (live, setup)
+    }
     guard live else { return }
     onLog("live: socket open — sending setup")
     if let setup { send(setup) }
@@ -414,9 +416,7 @@ public final class GeminiLiveClient: @unchecked Sendable {
     code: URLSessionWebSocketTask.CloseCode,
     reason: Data?
   ) {
-    lock.lock()
-    let live = ws === task
-    lock.unlock()
+    let live = withLock { ws === task }
     guard live else { return }
     let why = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
     onLog("live: closed \(code.rawValue) \(why)")
@@ -424,13 +424,12 @@ public final class GeminiLiveClient: @unchecked Sendable {
   }
 
   private func notifyClosed() {
-    lock.lock()
-    if closedNotified {
-      lock.unlock()
-      return
+    let already = withLock { () -> Bool in
+      if closedNotified { return true }
+      closedNotified = true
+      return false
     }
-    closedNotified = true
-    lock.unlock()
+    if already { return }
     onClosed()
   }
 
@@ -615,9 +614,7 @@ public final class GeminiLiveClient: @unchecked Sendable {
     name: String,
     response: [String: Any]
   ) {
-    lock.lock()
-    let live = ws
-    lock.unlock()
+    let live = withLock { ws }
     if live !== sock {
       log.warning("dropping deferred \(name, privacy: .public) tool response — Live session was replaced")
       return
