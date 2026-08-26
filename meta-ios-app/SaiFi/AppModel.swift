@@ -227,6 +227,12 @@ final class AppModel {
   }
 
   func loadMachines() {
+    #if DEBUG
+    if authBypass && !SaiAuth.isSignedIn() {
+      machinesInfo = "Voice only — sign in to load real machines"
+      return
+    }
+    #endif
     machinesInfo = "Loading…"
     clearMachinesError()
     machinesFetchOk = false
@@ -618,11 +624,7 @@ final class AppModel {
   }
 
   private func requestMic() async -> Bool {
-    await withCheckedContinuation { cont in
-      AVAudioApplication.requestRecordPermission { granted in
-        cont.resume(returning: granted)
-      }
-    }
+    await AudioIo.requestRecordPermission()
   }
 
   private func machinesLoadFailure(_ e: Error) -> (String, String) {

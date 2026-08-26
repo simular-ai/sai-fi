@@ -25,15 +25,11 @@ import SwiftUI
 @MainActor
 class DebugMenuViewModel {
   public var showDebugMenu: Bool
-  public var showHfpSpike: Bool
-  public var showLiveHarness: Bool
   public var mockDeviceKitViewModel: MockDeviceKitView.ViewModel
 
   init(mockDeviceKit: MockDeviceKitInterface) {
     self.mockDeviceKitViewModel = MockDeviceKitView.ViewModel(mockDeviceKit: mockDeviceKit)
     self.showDebugMenu = false
-    self.showHfpSpike = false
-    self.showLiveHarness = false
   }
 }
 

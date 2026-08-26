@@ -3,8 +3,7 @@
  */
 
 // Main entry point. Wearables.configure, SaiAuth.initialize, then the Sai shell. The CameraAccess
-// sample screens are no longer the user-facing app; DEBUG still overlays MockDeviceKit plus the
-// HFP / Live harness buttons.
+// sample screens are no longer the user-facing app; DEBUG still overlays MockDeviceKit.
 
 import Foundation
 import MWDATCore

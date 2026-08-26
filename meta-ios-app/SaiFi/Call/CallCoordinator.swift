@@ -1374,6 +1374,10 @@ final class CallCoordinator {
     wakeWatch = Task { @MainActor [weak self] in
       guard let self else { return }
       let token = await SaiAuth.idToken() ?? p.token
+      if token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        self.log("wake: skipped — no auth token (Gemini call continues without the agent)")
+        return
+      }
       let outcome: WakeOutcome
       do {
         outcome = try await ConciergeClient.wakeMachine(
@@ -1818,11 +1822,7 @@ final class CallCoordinator {
   }
 
   private func requestMic() async -> Bool {
-    await withCheckedContinuation { cont in
-      AVAudioApplication.requestRecordPermission { granted in
-        cont.resume(returning: granted)
-      }
-    }
+    await AudioIo.requestRecordPermission()
   }
 
   // ── Log stream (ported from CallController, exactly) ──────────────────────────────────────────

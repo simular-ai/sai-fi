@@ -38,7 +38,7 @@ public final class AudioIo: @unchecked Sendable {
   public typealias RouteChanged = @Sendable (String?, Bool) -> Void
 
   private let onRouteChanged: RouteChanged?
-  private let log = Logger(subsystem: "ai.simular.saifi", category: "Audio")
+  private let log = Logger(subsystem: "ai.simular.saiglasses", category: "Audio")
 
   private let engine = AVAudioEngine()
   private let player = AVAudioPlayerNode()
@@ -141,6 +141,17 @@ public final class AudioIo: @unchecked Sendable {
   /// True when a BT HFP headset (the glasses) is available as an input.
   public static func glassesHfpAvailable() -> Bool {
     AVAudioSession.sharedInstance().availableInputs?.contains { $0.portType == .bluetoothHFP } ?? false
+  }
+
+  /// Prompt for microphone access. Simulator can report `.denied` until the system dialog has
+  /// actually run, so this always requests unless already granted rather than trusting a stale denial.
+  public static func requestRecordPermission() async -> Bool {
+    if AVAudioApplication.shared.recordPermission == .granted { return true }
+    return await withCheckedContinuation { cont in
+      AVAudioApplication.requestRecordPermission { granted in
+        cont.resume(returning: granted)
+      }
+    }
   }
 
   // ── Session ────────────────────────────────────────────────────────────────

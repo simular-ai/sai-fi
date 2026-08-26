@@ -58,16 +58,14 @@ export DEVELOPER_DIR=/Users/jamielim/Downloads/Xcode-beta.app/Contents/Developer
 open SaiFi.xcodeproj
 ```
 
-Run on **iPhone 17 / iOS 27**. DEBUG overlay, **bottom-right**:
+Run on **iPhone 17 / iOS 27**. DEBUG overlay, **bottom-right**: **Mock glasses** (ladybug). Tap it,
+then **Set up Simulator glasses** — fakes DAT registration, pairs a Ray-Ban Meta, powers/unfolds/dons
+it, and plants `plant.mp4` / `plant.png` so capture has a still. Temple **Tap** = mute, **Tap & Hold**
+= end call.
 
-| Button | What it is |
-| --- | --- |
-| **Mock glasses** (ladybug) | MockDeviceKit. Tap **Set up Simulator glasses** — fakes DAT registration, pairs a Ray-Ban Meta, powers/unfolds/dons it, and plants `plant.mp4` / `plant.png` so capture has a still. Temple **Tap** = mute, **Tap & Hold** = end call. |
-| **Live harness** (antenna) | Gemini Live + Mac mic, no FSM. Useful if you only want to hear the model. |
-| **HFP spike** (waveform) | Duplex audio probe. **No Bluetooth in Simulator**, so this always uses the Mac mic; run it on a phone with glasses. |
-
-Then: Continue without account (or Sign in) → Home → Start. Audio line stays `phone`. That is the
-whole Simulator loop. It does **not** prove HFP, Meta AI registration, or a live agent.
+Then: Continue without account (or Sign in) → Home → Start. Audio line stays `phone` (Mac mic). Agent
+POSTs 401 until you sign in; that must not hang up the Gemini call. It does **not** prove HFP, Meta AI
+registration, or a live agent.
 
 Unit tests. DAT `Wearables.configure()` is process-global, so parallel clones crash — keep it serial:
 
@@ -91,7 +89,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://api.sai.simular.ai/v1/a
 
 1. Meta AI → Developer Mode ON. Registering this app **unregisters** the Android DAT app on the
    same Meta account.
-2. Fill `Secrets.xcconfig` with the **iOS** Firebase app values (bundle id `ai.simular.saifi`) plus
+2. Fill `Secrets.xcconfig` with the **iOS** Firebase app values (bundle id `ai.simular.saiglasses`) plus
    Gemini and `WEB_CLIENT_ID`.
 3. Run on a physical iPhone. Sign in, Home → Register glasses, Settings → Developer mode ON, pick
    a machine, Start.

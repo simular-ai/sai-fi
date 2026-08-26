@@ -208,7 +208,6 @@ final class GlassesGestureSession {
     deviceMonitorTask?.cancel()
     stateTask?.cancel()
     errorTask?.cancel()
-    session?.stop()
   }
 
   private func handle(_ st: DeviceSessionState) {
@@ -231,7 +230,13 @@ final class GlassesGestureSession {
     case .paused:
       onTap() // tap → mute
     case .stopped:
-      onStop() // tap-and-hold / doff / fold
+      // Only a transition OFF a live session is a hang-up. MockDeviceKit (and the
+      // pre-start snapshot we read so we don't miss a transition) can emit STOPPED
+      // first; treating that as "glasses folded" ends a Mac-mic Gemini call that
+      // never needed HFP.
+      if p == .started || p == .paused || p == .stopping {
+        onStop()
+      }
     default:
       break // STARTING / STOPPING / IDLE — transient
     }

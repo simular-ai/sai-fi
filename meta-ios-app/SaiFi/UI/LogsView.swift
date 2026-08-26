@@ -27,13 +27,16 @@ struct LogsView: View {
           HStack(spacing: 8) {
             TextField("Type a message", text: $typed)
               .textFieldStyle(.roundedBorder)
-            Button("Send") {
+              .frame(minHeight: 44)
+            Button {
               app.call.sendText(typed)
               typed = ""
+            } label: {
+              Text("Send")
+                .frame(minWidth: 72, minHeight: 44)
             }
             .buttonStyle(.saiFilled)
             .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .frame(width: 72, height: 40)
           }
         }
         if entries.isEmpty {

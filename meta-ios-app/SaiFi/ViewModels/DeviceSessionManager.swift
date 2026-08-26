@@ -33,7 +33,6 @@ final class DeviceSessionManager {
   deinit {
     deviceMonitorTask?.cancel()
     stateObserverTask?.cancel()
-    deviceSession?.stop()
   }
 
   func stopCurrentSession() {

@@ -288,10 +288,22 @@ public final class VoiceSession: @unchecked Sendable {
     }
   }
 
+  /// A fresh Firebase ID token per attempt. Empty/missing is NOT HTTP 401: Android throws
+  /// `error("no auth token")`, and mapping this to `ConciergeHttpException(401)` made a
+  /// Gemini-only Simulator call hang up with "Voice access was denied."
   fileprivate func token() async throws -> String {
-    guard let t = await tokenProvider() else { throw ConciergeHttpException(status: 401, message: "no auth token") }
+    guard let t = await tokenProvider(),
+      !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      throw MissingAuthToken()
+    }
     return t
   }
+}
+
+/// Same failure as Android `error("no auth token")` — a missing bearer, not a refused credential.
+private struct MissingAuthToken: Error, LocalizedError {
+  var errorDescription: String? { "no auth token" }
 }
 
 /// The live `VoiceTransport`: open a message stream, follow or discard it, POST operations.
