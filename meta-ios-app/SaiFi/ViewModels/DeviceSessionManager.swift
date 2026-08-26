@@ -44,6 +44,31 @@ final class DeviceSessionManager {
     isReady = false
   }
 
+  /// `stop()` is not synchronous: DAT still reports `sessionAlreadyExists` until the previous
+  /// session reaches `.stopped`. Tests (and anyone who will `createSession` again immediately)
+  /// must wait.
+  func stopCurrentSessionAndWait(timeout: TimeInterval = 5) async {
+    guard let session = deviceSession else { return }
+    stateObserverTask?.cancel()
+    stateObserverTask = nil
+    let states = session.stateStream()
+    session.stop()
+    if session.state != .stopped {
+      await withTaskGroup(of: Void.self) { group in
+        group.addTask {
+          for await state in states where state == .stopped { return }
+        }
+        group.addTask {
+          try? await Task.sleep(for: .seconds(timeout))
+        }
+        await group.next()
+        group.cancelAll()
+      }
+    }
+    deviceSession = nil
+    isReady = false
+  }
+
   /// Stops the device session and cancels monitoring. Call before releasing.
   func cleanup() {
     deviceMonitorTask?.cancel()

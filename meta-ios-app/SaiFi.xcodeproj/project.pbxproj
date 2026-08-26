@@ -11,6 +11,8 @@
 		8FD96B952E6F0F7D00F56AB2 /* MWDATCamera in Frameworks */ = {isa = PBXBuildFile; productRef = 8FD96B942E6F0F7D00F56AB2 /* MWDATCamera */; };
 		8FD96B952E6F0F7D00F56AB3 /* MWDATMockDevice in Frameworks */ = {isa = PBXBuildFile; productRef = 8FD96B942E6F0F7D00F56AB3 /* MWDATMockDevice */; };
 		C0RE0000000000000000003 /* SaiFiCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0RE0000000000000000002 /* SaiFiCore */; };
+		FIR0000000000000000003 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = FIR0000000000000000002 /* FirebaseAuth */; };
+		GID0000000000000000003 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = GID0000000000000000002 /* GoogleSignIn */; };
 		E66CC01D2F3E1A9300B07380 /* MWDATMockDeviceTestClient in Frameworks */ = {isa = PBXBuildFile; productRef = E66CC01E2F3E1A9300B07380 /* MWDATMockDeviceTestClient */; };
 /* End PBXBuildFile section */
 
@@ -78,6 +80,8 @@
 				8FD96B952E6F0F7D00F56AB2 /* MWDATCamera in Frameworks */,
 				8FD96B952E6F0F7D00F56AB3 /* MWDATMockDevice in Frameworks */,
 				C0RE0000000000000000003 /* SaiFiCore in Frameworks */,
+				FIR0000000000000000003 /* FirebaseAuth in Frameworks */,
+				GID0000000000000000003 /* GoogleSignIn in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -146,6 +150,8 @@
 				8FD96B942E6F0F7D00F56AB2 /* MWDATCamera */,
 				8FD96B942E6F0F7D00F56AB3 /* MWDATMockDevice */,
 				C0RE0000000000000000002 /* SaiFiCore */,
+				FIR0000000000000000002 /* FirebaseAuth */,
+				GID0000000000000000002 /* GoogleSignIn */,
 			);
 			productName = SaiFi;
 			productReference = 3A3A3A3A3A3A3A3A3A3A3A3A /* SaiFi.app */;
@@ -231,6 +237,8 @@
 			packageReferences = (
 				95F7F3332DEF0D91006D1C1A /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */,
 				C0RE0000000000000000001 /* XCLocalSwiftPackageReference "SaiFiCore" */,
+				FIR0000000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				GID0000000000000000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 			);
 			productRefGroup = 7A7A7A7A7A7A7A7A7A7A7A7A /* Products */;
 			projectDirPath = "";
@@ -642,6 +650,22 @@
 				version = 0.8.0;
 			};
 		};
+		FIR0000000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.0.0;
+			};
+		};
+		GID0000000000000000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -676,6 +700,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 95F7F3332DEF0D91006D1C1A /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
 			productName = MWDATMockDeviceTestClient;
+		};
+		FIR0000000000000000002 /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FIR0000000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		GID0000000000000000002 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = GID0000000000000000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

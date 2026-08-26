@@ -184,6 +184,26 @@ final class GlassesGestureSession {
     session = nil
   }
 
+  /// Wait until DAT has actually released the device. `stop()` returns while the session is still
+  /// `.stopping`, and the next `createSession` then fails with `sessionAlreadyExists`.
+  func stopAndWait(timeout: TimeInterval = 5) async {
+    guard let live = session else { return }
+    let states = live.stateStream()
+    stop()
+    if live.state != .stopped {
+      await withTaskGroup(of: Void.self) { group in
+        group.addTask {
+          for await state in states where state == .stopped { return }
+        }
+        group.addTask {
+          try? await Task.sleep(for: .seconds(timeout))
+        }
+        await group.next()
+        group.cancelAll()
+      }
+    }
+  }
+
   isolated deinit {
     deviceMonitorTask?.cancel()
     stateTask?.cancel()

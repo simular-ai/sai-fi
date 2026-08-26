@@ -108,9 +108,9 @@ The same architecture, in `meta-ios-app/`. `SaiFiCore/` is Foundation-only (FSM,
 | `SaiFiCore/` | Pure half. Gate: `swift run saifi-check` (471 checks, including the conversation harness). |
 | `GlassesGestureSession` / `GlassesCamera` | DAT session + still capture. iOS 0.8: one session only; `stream.stop()` then `addStream` reuses the slot. |
 | `Prefs` / `PhoneLocation` / `Theme` / `CallNotifications` | Same keys, one-shot location, Sai tokens, ended-reason banner only (no ongoing-call notification). |
-| Audio / Gemini Live | In the Xcode target. HFP duplex unverified on hardware. |
+| `AudioIo` / `GeminiLiveClient` / `CallCoordinator` | In the Xcode target. `CallCoordinator` merges Android's CallService + CallController. HFP duplex unverified on hardware. |
 | Agent HTTP | In SaiFiCore (`HttpAgentBridge`, `VoiceChannelClient`, `VoiceSession`). Scripted harness green; live POST unverified. |
-| UI / sign-in / CallCoordinator | Not written yet. |
+| `SaiAuth` / `AppModel` / `SaiFi/UI/` | Google Sign-In → Firebase ID token; sign-in gate, Home, Settings, Logs. |
 
 ---
 

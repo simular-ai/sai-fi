@@ -16,13 +16,77 @@ from the Android one.
 | | |
 | --- | --- |
 | `SaiFiCore/` | The pure half — FSM, protocol, activity log, AgentEventRouter, VoiceConverters, LiveTurnGate, VoiceProfile, every pure policy, agent HTTP (no network), and the conversation harness. **471 checks passing** (`swift run saifi-check`) |
-| `SaiFi.xcodeproj` | Seeded from the CameraAccess sample, renamed, Info.plist / xcconfig / Secrets wired, SaiFiCore linked as a local package. Compiles for generic iOS without signing; Simulator tests run on iPhone 17 / iOS 27 |
+| `SaiFi.xcodeproj` | Seeded from the CameraAccess sample, renamed, Info.plist / xcconfig / Secrets wired, SaiFiCore linked as a local package. FirebaseAuth + GoogleSignIn via SPM. Compiles for generic iOS without signing |
 | `SaiFi/Glasses/` | `GlassesGestureSession` + `GlassesCamera`. MockDeviceKit on iPhone 17: a second `DeviceSession` is refused, so capture attaches to the gesture session; `stream.stop()` then `addStream` still delivers frames. 7/7 `MockDeviceTests` green |
-| `SaiFi/Call/` | `AudioIo` (16 kHz capture / 24 kHz playback, noise gate substitutes silence), `GeminiLiveClient` (`BidiGenerateContent?key=`), DEBUG HFP spike + Live harness. Simulator tests green. **HFP duplex unverified on hardware** |
-| `SaiFi/Support/` | Prefs (same keys as Android), PhoneLocation (one-shot, never streamed), Theme tokens, ended-reason notification. Sign-in / CallCoordinator / screens not written yet |
-| Everything else | Not written yet — SaiAuth, CallCoordinator, screens |
+| `SaiFi/Call/` | `AudioIo`, `GeminiLiveClient`, `CallCoordinator` (Android `CallService` + `CallController` merged). Simulator tests green. **HFP duplex unverified on hardware** |
+| `SaiFi/Support/` + `SaiFi/UI/` | Prefs, PhoneLocation, Theme, ended-reason notification, `SaiAuth`, the four screens (sign-in gate, Home, Settings, Logs). CameraAccess sample UI is no longer the user-facing app |
+| Live Gemini / live agent / Meta AI registration | Need keys and a phone. Not verified in-tree |
 
 The check registry is pinned at ≥471 in `GateTests` so a shrinking catalog cannot go green quietly.
+
+## How to test
+
+Three layers. The first needs no device; the last is the only one that proves the glasses.
+
+### 1. Parity — no Xcode, no device
+
+```bash
+cd meta-ios-app/SaiFiCore
+swift run saifi-check     # 471 checks
+swift test                # the same checks under XCTest
+```
+
+This is the Android↔iOS contract. If it is green, the FSM, the spoken strings, and the protocol
+match the goldens.
+
+### 2. Simulator — no glasses, no Bluetooth
+
+Copy [`Secrets.xcconfig.example`](Secrets.xcconfig.example) to `Secrets.xcconfig` and fill in at
+least `GEMINI_API_KEY`. Firebase keys are required for a real sign-in; without them a DEBUG build
+offers **Continue without account** so you can still reach Home.
+
+```bash
+export DEVELOPER_DIR=/Users/jamielim/Downloads/Xcode-beta.app/Contents/Developer   # if using the beta
+open SaiFi.xcodeproj
+```
+
+Run on **iPhone 17 / iOS 27**. The DEBUG overlay (bottom-leading) opens MockDeviceKit: pair a fake
+device, drive temple gestures (`captouch.tap()` / `tapAndHold()`), feed video from an HEVC file or
+the Mac's camera. The Mac's mic and speakers are a real Gemini Live conversation if the key is set.
+HFP will **not** appear — there is no Bluetooth in the Simulator — so the Audio line stays `phone`.
+
+Unit tests. DAT `Wearables.configure()` is process-global, so parallel clones crash — keep it serial:
+
+```bash
+export DEVELOPER_DIR=/Users/jamielim/Downloads/Xcode-beta.app/Contents/Developer   # if using the beta
+xcodebuild test -scheme SaiFi \
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -only-testing:SaiFiTests \
+  -parallel-testing-enabled NO
+```
+
+### 3. Phone + glasses
+
+Pre-flight the API, then the ten-check script:
+
+```bash
+curl -s https://api.sai.simular.ai/health
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://api.sai.simular.ai/v1/agents/message
+# 401 is the pass (unauthenticated)
+```
+
+1. Meta AI → Developer Mode ON. Registering this app **unregisters** the Android DAT app on the
+   same Meta account.
+2. Fill `Secrets.xcconfig` with the **iOS** Firebase app values (bundle id `ai.simular.saifi`) plus
+   Gemini and `WEB_CLIENT_ID`.
+3. Run on a physical iPhone. Sign in, Home → Register glasses, Settings → Developer mode ON, pick
+   a machine, Start.
+4. Walk [`docs/IOS_ON_DEVICE_CHECK.md`](../docs/IOS_ON_DEVICE_CHECK.md) — the same ten checks as
+   Android.
+
+What this still cannot claim until you run it: HFP duplex / AEC on the glasses, a live
+`POST /v1/agents/message`, and a real Meta AI registration round trip. Those need your accounts
+and hardware.
 
 ## The two halves, and why they are separate packages
 

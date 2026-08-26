@@ -651,6 +651,10 @@ public final class GeminiLiveClient: @unchecked Sendable {
     run(gate.injectSessionState(kind, turns, sticky: sticky))
   }
 
+  public var didSpeakThisTurn: Bool { gate.didSpeakThisTurn }
+  public var isModelSpeaking: Bool { gate.isModelSpeaking }
+  public func claimOutcomeNudge() -> Bool { gate.claimOutcomeNudge() }
+
   private static func phoneClock() -> String {
     describePhoneClock(
       nowMs: Int64((Date().timeIntervalSince1970 * 1000.0).rounded()),

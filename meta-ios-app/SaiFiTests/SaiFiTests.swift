@@ -32,16 +32,16 @@ final class ViewModelIntegrationTests: XCTestCase {
     mockDevice = pairedMockDevice
     cameraKit = pairedMockDevice.services.camera
 
-    // Power on and unfold the device to make it available
+    // Power on, unfold, and don — AutoDeviceSelector is not eligible until the glasses are worn.
     pairedMockDevice.powerOn()
     pairedMockDevice.unfold()
+    pairedMockDevice.don()
 
-    // Wait for device to be available in Wearables
     try await Task.sleep(nanoseconds: 1_000_000_000)
   }
 
   override func tearDown() async throws {
-    viewModel?.endSession()
+    await viewModel?.endSession()
     viewModel = nil
     MockDeviceKit.shared.disable()
     mockDevice = nil

@@ -21,15 +21,19 @@ final class MockDeviceTests: XCTestCase {
   }
 
   override func tearDown() async throws {
-    gesture?.stop()
+    if let gesture {
+      await gesture.stopAndWait()
+    }
     gesture = nil
-    harness?.sessionManager.stopCurrentSession()
+    await harness?.sessionManager.stopCurrentSessionAndWait()
     MockDeviceKit.shared.permissions.set(.camera, .granted)
     harness = nil
     try await super.tearDown()
   }
 
   override class func tearDown() {
+    sharedHarness?.sessionManager.cleanup()
+    sharedHarness = nil
     MockDeviceKit.shared.disable()
     super.tearDown()
   }

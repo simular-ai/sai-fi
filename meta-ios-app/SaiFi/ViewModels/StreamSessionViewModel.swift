@@ -84,12 +84,14 @@ final class StreamSessionViewModel {
   }
 
   /// Stops both the stream and the underlying device session. Call in test tearDown.
-  func endSession() {
+  func endSession() async {
+    stream?.stop()
     stream = nil
     clearListeners()
     streamingStatus = .stopped
     currentVideoFrame = nil
     hasReceivedFirstFrame = false
+    await sessionManager.stopCurrentSessionAndWait()
     sessionManager.cleanup()
   }
 

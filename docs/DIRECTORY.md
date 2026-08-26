@@ -33,6 +33,7 @@ machine itself, and talks to the Sai API only to reach the agent. Android ships;
 | `meta-ios-app/` | **The iOS port** (in progress). Local SwiftPM package `SaiFiCore/` is the pure half; the Xcode app target holds DAT / audio / UI. |
 | `presenter/` | A tiny Node/TypeScript demo dashboard (DEBUG-only spectator feed). |
 | `.github/workflows/android.yml` | CI: builds the app and runs the JVM unit tests. |
+| `.github/workflows/ios.yml` | CI: SaiFiCore gate (`saifi-check`) plus unsigned generic-iOS compile. |
 
 ## docs/
 
@@ -41,6 +42,7 @@ machine itself, and talks to the Sai API only to reach the agent. Android ships;
 | `SAI_GLASSES_APP.md` | The architecture overview — read this first. |
 | `CONCIERGE_CLIENT_PROTOCOL.md` | The client half of the wire contract (endpoints, the device tools). |
 | `ON_DEVICE_CHECK.md` | A runnable checklist for verifying a build on real glasses — ten checks, each naming what it exercises and how it fails. |
+| `IOS_ON_DEVICE_CHECK.md` | The same ten checks for the iOS client: Simulator vs hardware, `Secrets.xcconfig`, `saifi://`, one DAT app per Meta account. |
 | `ON_DEVICE_DEMO_FLOW.md` | The same ten checks as a spoken script. |
 | `VOICE_FSM.md` | The design of the conversation state machine this app owns — modes, effects, the admission rule, the races, and why each rule exists. Read before changing anything under `fsm/`. |
 | `DIRECTORY.md` | This file. |
