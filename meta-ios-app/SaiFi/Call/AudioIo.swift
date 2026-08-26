@@ -160,10 +160,13 @@ public final class AudioIo: @unchecked Sendable {
   public static func configureSession() throws {
     let session = AVAudioSession.sharedInstance()
     var options: AVAudioSession.CategoryOptions = []
-    // Plan: `.allowBluetoothHFP` on iOS 26+, else `.allowBluetooth`. On the iOS 27 SDK those are
-    // the same option (`allowBluetooth` is the deprecated name), so the HFP name is used on every
-    // supported OS (deployment is iOS 17).
+    // Same raw value either name. `.allowBluetoothHFP` exists only on the iOS 26+ SDK (Xcode 26+);
+    // macos-15 CI is Xcode 16.4 / iOS 18.5, which still has the older `.allowBluetooth` spelling.
+#if compiler(>=6.2)
     options.insert(.allowBluetoothHFP)
+#else
+    options.insert(.allowBluetooth)
+#endif
     try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
     try session.setActive(true, options: .notifyOthersOnDeactivation)
   }
