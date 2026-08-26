@@ -184,7 +184,7 @@ public final class GeminiLiveClient: @unchecked Sendable {
   private var pingTask: Task<Void, Never>?
   private var pendingSetup: String?
 
-  private let log = Logger(subsystem: "ai.simular.saifi", category: "Live")
+  private let log = Logger(subsystem: "ai.simular.saiglasses", category: "Live")
 
   private final class SocketHook: NSObject, URLSessionWebSocketDelegate {
     weak var owner: GeminiLiveClient?

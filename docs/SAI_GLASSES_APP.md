@@ -15,7 +15,7 @@ modes, the effect grammar, the admission rule, the races, and why each rule exis
 [`VOICE_FSM.md`](VOICE_FSM.md). Read that before changing anything under `fsm/`.
 
 **Code:** `meta-android-app/` (Kotlin, display name "sai-fi", `applicationId ai.simular.saiglasses`,
-package `…cameraaccess.saispike`) and `meta-ios-app/` (Swift, bundle id `ai.simular.saifi`, in
+package `…cameraaccess.saispike`) and `meta-ios-app/` (Swift, bundle id `ai.simular.saiglasses`, in
 progress).
 
 The applicationId and the Java package still carry the app's earlier name. They change together, to

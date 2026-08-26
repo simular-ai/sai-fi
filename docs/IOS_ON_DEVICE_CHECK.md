@@ -55,7 +55,7 @@ Copy [`meta-ios-app/Secrets.xcconfig.example`](../meta-ios-app/Secrets.xcconfig.
 - `GEMINI_API_KEY` — your own key from Google AI Studio. Audio never touches a Simular server.
 - Firebase **iOS** values (`FIREBASE_APP_ID`, `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`,
   `IOS_CLIENT_ID`, `REVERSED_CLIENT_ID`). **These are not the Android ones.** Add an iOS app to the
-  same Firebase project for bundle id `ai.simular.saifi`.
+  same Firebase project for bundle id `ai.simular.saiglasses`.
 - `WEB_CLIENT_ID` — the OAuth **web** client, unchanged from Android. That is the audience the Sai
   API verifies.
 - `SAI_API_URL` — already production in the example. xcconfig treats `//` as a comment, so a URL
