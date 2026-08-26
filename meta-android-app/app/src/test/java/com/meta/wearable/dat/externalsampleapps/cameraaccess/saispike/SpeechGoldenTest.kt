@@ -14,7 +14,7 @@
 // exactly the same way as the rest — see the `say` vs `instruct` regressions recorded in
 // `Speech.kt` itself, both of which a user heard read aloud.
 //
-// It is also the Android half of a cross-port gate. `meta-ios-app/SaiFiCore` reimplements this file
+// It is also the Android half of a cross-port gate. `meta-ios-app (untested on-device)/SaiFiCore` reimplements this file
 // in Swift and replays the same JSON, which is the only thing holding the two equal.
 //
 // Rewrite with `SAI_REGEN_GOLDENS=1 ./gradlew :app:testDebugUnitTest --rerun --tests

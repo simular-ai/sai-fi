@@ -5,7 +5,7 @@
 // WHY THIS EXISTS. `docs/CONCIERGE_CLIENT_PROTOCOL.md` §8 tells a port implementing this client in
 // another language that "sai-fi's FsmGoldenTest runs 63 scenarios that pin what the FSM does with
 // every input sequence that has ever mattered. If you write your own, that catalog is the spec worth
-// copying." `meta-ios-app/SaiFiCore` is that port, and this file is how the catalog crosses: the
+// copying." `meta-ios-app (untested on-device)/SaiFiCore` is that port, and this file is how the catalog crosses: the
 // STEPS are serialised, and so is a canonical TRACE of everything observable that the steps produced.
 // The Swift FSM replays the steps and compares the trace.
 //

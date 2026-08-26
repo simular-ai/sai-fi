@@ -49,7 +49,7 @@ public struct ParityFixtures: Sendable {
   ///
   /// `#filePath` is used INSIDE the body, deliberately. As a default argument it would resolve at the
   /// CALL SITE — which is how the XCTest target ended up looking for the fixtures under
-  /// `meta-ios-app/Tests/…` instead of `meta-ios-app/SaiFiCore/Tests/…`, while `saifi-check` worked by
+  /// `meta-ios-app (untested on-device)/Tests/…` instead of `meta-ios-app (untested on-device)/SaiFiCore/Tests/…`, while `saifi-check` worked by
   /// accident because its default expression happens to live in this file. Anchoring it here makes the
   /// answer independent of who asks.
   ///

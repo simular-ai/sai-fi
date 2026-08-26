@@ -259,7 +259,7 @@ final class AppModel {
         selectedMachine = nil
         machinesFetchOk = false
         showMachinesError(
-          "sai_api_url is empty. Set it in meta-ios-app/Secrets.xcconfig "
+          "sai_api_url is empty. Set it in meta-ios-app (untested on-device)/Secrets.xcconfig "
             + "(https://api.sai.simular.ai) and rebuild.",
           summary: "No sai_api_url")
         return

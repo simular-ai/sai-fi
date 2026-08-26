@@ -15,7 +15,7 @@ modes, the effect grammar, the admission rule, the races, and why each rule exis
 [`VOICE_FSM.md`](VOICE_FSM.md). Read that before changing anything under `fsm/`.
 
 **Code:** `meta-android-app/` (Kotlin, display name "sai-fi", `applicationId ai.simular.saiglasses`,
-package `…cameraaccess.saispike`) and `meta-ios-app/` (Swift, bundle id `ai.simular.saiglasses`, in
+package `…cameraaccess.saispike`) and `meta-ios-app (untested on-device)/` (Swift, bundle id `ai.simular.saiglasses`, in
 progress).
 
 The applicationId and the Java package still carry the app's earlier name. They change together, to
@@ -35,7 +35,7 @@ named only where they explain a current trade-off.
   whole voice layer itself. Distribution is gated (developer-preview release channels). **iOS
   development and internal TestFlight are open**; App Store and external TestFlight are blocked by
   MFi (`com.meta.ar.wearable`) until Meta puts third-party apps on their Product Plan. The iOS port
-  lives in `meta-ios-app/`. The Android app is still the shipping client.
+  lives in `meta-ios-app (untested on-device)/`. The Android app is still the shipping client.
 - **A standalone Android app, not inside the Capacitor Sai app.** DAT is Kotlin/Swift. Fast native
   iteration beat embedding this in the existing desktop/mobile shell.
 - **Gemini Live owns audio; this app owns the conversation; the Sai API owns the agent.** There is
@@ -102,7 +102,7 @@ is running, for instance.
 
 ### iOS modules
 
-The same architecture, in `meta-ios-app/`. `SaiFiCore/` is Foundation-only (FSM, protocol, policies, goldens). The Xcode target holds DAT and anything that needs AVFoundation / SwiftUI.
+The same architecture, in `meta-ios-app (untested on-device)/`. `SaiFiCore/` is Foundation-only (FSM, protocol, policies, goldens). The Xcode target holds DAT and anything that needs AVFoundation / SwiftUI.
 
 | Module | Role |
 | --- | --- |

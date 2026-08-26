@@ -11,7 +11,7 @@
 // fail on a real call, and two of the recorded regressions in that file are misclassifications
 // between `say` and `instruct` that a user heard read aloud.
 //
-// It became urgent with the iOS port. `meta-ios-app/SaiFiCore` reimplements this file in Swift, and
+// It became urgent with the iOS port. `meta-ios-app (untested on-device)/SaiFiCore` reimplements this file in Swift, and
 // these fixtures are the only thing holding the two equal — the same job the fixtures used to do
 // across cloud-api's TypeScript and this Kotlin, and the same drift they existed to catch.
 //

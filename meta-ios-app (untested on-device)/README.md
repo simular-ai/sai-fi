@@ -1,4 +1,4 @@
-# meta-ios-app — the iOS client
+# meta-ios-app (untested on-device) — the iOS client
 
 The iOS port of [`meta-android-app`](../meta-android-app): the Sai voice concierge on Meta Ray-Ban
 glasses. Same two links, same conversation state machine, same bundled voice profile — see
@@ -33,7 +33,7 @@ Three layers. The first needs no device; the last is the only one that proves th
 ### 1. Parity — no Xcode, no device
 
 ```bash
-cd meta-ios-app/SaiFiCore
+cd "meta-ios-app (untested on-device)/SaiFiCore"
 swift run saifi-check     # 471 checks
 swift test                # the same checks under XCTest
 ```

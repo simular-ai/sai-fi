@@ -5,7 +5,7 @@ verified in the Simulator (MockDeviceKit) and by `swift run saifi-check`. Until 
 file on hardware, do not treat HFP duplex, Meta AI registration, or a live agent POST as proven.
 
 The same ten checks as [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md), for the iOS client in
-`meta-ios-app/`. Behaviour, wording, and failure modes are identical; only the build, the secrets
+`meta-ios-app (untested on-device)/`. Behaviour, wording, and failure modes are identical; only the build, the secrets
 file, the log surface, and a handful of platform facts change. Run this after any change that
 touches the iOS call.
 
@@ -27,7 +27,7 @@ The app talks to whatever `SAI_API_URL` in `Secrets.xcconfig` points at — prod
 (`https://api.sai.simular.ai`) by default. Confirm it is up before you touch the glasses:
 
 ```bash
-SAI_API_URL=$(grep '^SAI_API_URL' meta-ios-app/Secrets.xcconfig | sed 's/.*= *//; s:/$()::')
+SAI_API_URL=$(grep '^SAI_API_URL' "meta-ios-app (untested on-device)/Secrets.xcconfig" | sed 's/.*= *//; s:/$()::')
 SAI_API_URL="${SAI_API_URL:-https://api.sai.simular.ai}"
 curl -s "$SAI_API_URL/health"                                              # → {"status":"ok",…}
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "$SAI_API_URL/v1/agents/message"
@@ -43,14 +43,14 @@ Every run here wakes a real VM and bills a real agent. Prefer the off-device gat
 does not actually need the glasses:
 
 ```bash
-cd meta-ios-app/SaiFiCore
+cd "meta-ios-app (untested on-device)/SaiFiCore"
 swift run saifi-check     # 471 checks, no Xcode, no device
 ```
 
 ### Secrets
 
-Copy [`meta-ios-app/Secrets.xcconfig.example`](../meta-ios-app/Secrets.xcconfig.example) to
-`meta-ios-app/Secrets.xcconfig` if you have not already. Fill in:
+Copy [`meta-ios-app (untested on-device)/Secrets.xcconfig.example`](../meta-ios-app%20%28untested%20on-device%29/Secrets.xcconfig.example) to
+`meta-ios-app (untested on-device)/Secrets.xcconfig` if you have not already. Fill in:
 
 - `GEMINI_API_KEY` — your own key from Google AI Studio. Audio never touches a Simular server.
 - Firebase **iOS** values (`FIREBASE_APP_ID`, `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`,
@@ -70,7 +70,7 @@ This repo's local loop uses Xcode 27 beta:
 
 ```bash
 export DEVELOPER_DIR=/Users/jamielim/Downloads/Xcode-beta.app/Contents/Developer
-open meta-ios-app/SaiFi.xcodeproj
+open "meta-ios-app (untested on-device)/SaiFi.xcodeproj"
 ```
 
 Build and run on a physical iPhone. Internal TestFlight is the distribution path; the App Store is
@@ -100,7 +100,7 @@ The presenter dashboard is Android DEBUG-only and is **not** on iOS (out of scop
 ## 1. The ten checks
 
 Identical to [`ON_DEVICE_CHECK.md`](ON_DEVICE_CHECK.md) §1. The Kotlin type names in that file map
-as follows — behaviour is the same, the files live under `meta-ios-app/`:
+as follows — behaviour is the same, the files live under `meta-ios-app (untested on-device)/`:
 
 | Android | iOS |
 | --- | --- |
