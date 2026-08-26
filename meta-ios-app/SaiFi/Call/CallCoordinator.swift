@@ -244,6 +244,8 @@ final class CallCoordinator {
   /// Muted at first ready — do not greet later if they unmute / reconnect.
   @ObservationIgnored private var greetingSkippedMuted = false
 
+  /// Configured DAT handle for this call, or nil when Wearables.configure never succeeded.
+  @ObservationIgnored private var wearables: (any WearablesInterface)?
   @ObservationIgnored private var cachedProfile: VoiceProfile?
   /// Snapshot of the FSM, refreshed after agent events / effects. `VoiceSession.state()` is async;
   /// the voice `switchMachine` tool must answer synchronously, so it reads this.
@@ -307,8 +309,12 @@ final class CallCoordinator {
 
   // ── Public API (methods, not Intent actions) ──────────────────────────────────────────────────
 
-  func start(params: StartParams) {
+  /// `wearables` is the already-configured DAT handle. `Wearables.shared` traps if `configure()`
+  /// never succeeded — which is the Simulator crash when DAT keys are missing — so the caller
+  /// passes `AppModel`'s handle, or nil when there is none.
+  func start(params: StartParams, wearables: (any WearablesInterface)? = nil) {
     self.params = params
+    self.wearables = wearables
     startCall()
   }
 
@@ -396,14 +402,19 @@ final class CallCoordinator {
 
     // Glasses temple button: tap → mute/unmute Sai, tap-and-hold (session STOPPED) → end. Tap used to
     // pause/resume; muting is what you actually want mid-conversation (Sai keeps listening and working),
-    // and pause/resume moved to an on-screen button. Best-effort — no-ops if no glasses registered.
-    let session = GlassesGestureSession(
-      wearables: Wearables.shared,
-      onTap: { [weak self] in self?.applyToggleMute() },
-      onStop: { [weak self] in self?.endCallByGlasses() },
-      onLog: { [weak self] line in self?.log(line) })
-    gesture = session
-    Task { await session.start() }
+    // and pause/resume moved to an on-screen button. Best-effort — no-ops if no glasses registered
+    // or DAT never configured (Wearables.shared traps in that case).
+    if let wearables {
+      let session = GlassesGestureSession(
+        wearables: wearables,
+        onTap: { [weak self] in self?.applyToggleMute() },
+        onStop: { [weak self] in self?.endCallByGlasses() },
+        onLog: { [weak self] line in self?.log(line) })
+      gesture = session
+      Task { await session.start() }
+    } else {
+      log("glasses: Wearables SDK not configured — temple button and camera unavailable")
+    }
 
     bringUpAudio()
   }
@@ -779,9 +790,17 @@ final class CallCoordinator {
     }
     do {
       try Task.checkCancellation()
+      guard let wearables else {
+        log("camera: FAILED (no Wearables) — SDK was not configured")
+        result = (
+          false,
+          "I couldn't reach the glasses camera — the glasses may not be set up for this app. Make "
+            + "sure they're connected and registered, then try again.")
+        return
+      }
       let cap = await GlassesCamera.capture(
         session: session,
-        wearables: Wearables.shared,
+        wearables: wearables,
         onLog: { [weak self] line in
           Task { @MainActor in self?.log(line) }
         },
@@ -971,6 +990,7 @@ final class CallCoordinator {
     update { $0.reconnecting = false }
     gesture?.stop()
     gesture = nil
+    wearables = nil
     live?.close()
     live = nil
     concierge?.close()

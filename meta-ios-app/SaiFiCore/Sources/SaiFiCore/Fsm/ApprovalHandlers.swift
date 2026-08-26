@@ -40,7 +40,14 @@ extension Concierge {
     // Link-only cards are completed by the user in the browser; the server rejects a resolution for
     // them. The FSM state still clears — the concierge is no longer waiting on a spoken answer.
     if state.pendingApprovalLinkOnly != true {
-      try? await agent.resolveApproval(id: id, decision: decision, selection: nil)
+      // Do not swallow: a failed POST must keep the request PENDING, or the call deadlocks waiting
+      // for an answer it believes it already gave. Android lets this throw for the same reason.
+      do {
+        try await agent.resolveApproval(id: id, decision: decision, selection: nil)
+      } catch {
+        log("approval resolve failed: \(error)")
+        return
+      }
     }
 
     clearApprovalTimer()

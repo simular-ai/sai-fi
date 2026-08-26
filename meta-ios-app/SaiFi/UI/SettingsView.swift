@@ -32,10 +32,12 @@ struct SettingsView: View {
   private var account: some View {
     VStack(alignment: .leading, spacing: 10) {
       GroupHeader(title: "Account")
-      Text(app.userEmail ?? "Signed in")
+      Text(app.userEmail ?? (app.signedInWithoutAccount ? "Not signed in" : "Signed in"))
         .font(.body)
         .lineLimit(1)
-      Text("Signed in with Google")
+      Text(app.signedInWithoutAccount
+        ? "Voice only — sign in for the agent"
+        : "Signed in with Google")
         .font(.footnote)
         .foregroundStyle(colors.mutedForeground)
       Button("Sign out") { app.signOut() }

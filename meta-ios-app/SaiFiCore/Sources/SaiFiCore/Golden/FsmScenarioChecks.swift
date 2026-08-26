@@ -466,3 +466,64 @@ private func activityLogFrame(_ e: JsonObject) -> [String: Any] {
     return ["type": e.optString("type")]
   }
 }
+
+/// The `try?` swallows that used to leave the FSM believing work had started, or an approval
+/// resolved, after the agent refused the write. S58 covers the immediate forward path; these cover
+/// the two other writes that had the same shape.
+func fsmDispatchFailureChecks() -> [Check] {
+  [
+    Check(name: "a failed queue drain does not start a turn the agent never accepted") {
+      let agent = FakeAgent()
+      let voice = FakeChannel()
+      let concierge = Concierge(
+        agent: agent, voice: voice, engine: FakeEngine { _, _ in [] }, timer: VirtualTimer())
+      await agent.failForwardTask()
+      _ = await concierge.applyClientEffects(
+        JsonArray([["kind": "enqueue", "task": "check my unread emails"]]))
+      let state = await concierge.getState()
+      let spoken = await voice.spoken
+      return firstFailure([
+        expectEqual(state.mode, .idle, "mode stays idle"),
+        expectEqual(state.inFlight, [], "nothing in flight"),
+        expectTrue(spoken.contains(where: { $0.contains("couldn't get that started") }), "user hears the failure"),
+      ])
+    },
+    Check(name: "sendQueuedNow does not mark a refused forward as running") {
+      let agent = FakeAgent()
+      let voice = FakeChannel()
+      let concierge = Concierge(
+        agent: agent, voice: voice, engine: FakeEngine { _, _ in [] }, timer: VirtualTimer())
+      _ = await concierge.applyClientEffects(
+        JsonArray([["kind": "forwardToAgent", "text": "book a table"]]))
+      _ = await concierge.applyClientEffects(
+        JsonArray([["kind": "enqueue", "task": "email Dana"]]))
+      await agent.failForwardTask()
+      _ = await concierge.applyClientEffects(
+        JsonArray([["kind": "sendQueuedNow", "task": "email Dana"]]))
+      let state = await concierge.getState()
+      let spoken = await voice.spoken
+      return firstFailure([
+        expectEqual(state.inFlight, ["book a table"], "only the accepted task is in flight"),
+        expectTrue(spoken.contains(where: { $0.contains("couldn't get that started") }), "user hears the failure"),
+      ])
+    },
+    Check(name: "a refused approve leaves the request pending") {
+      let agent = FakeAgent()
+      let voice = FakeChannel()
+      let concierge = Concierge(
+        agent: agent, voice: voice, engine: FakeEngine { _, _ in [] }, timer: VirtualTimer())
+      _ = await concierge.handleAgentEvent(
+        .approvalRequest(
+          ApprovalRequestPayload(
+            id: "a1",
+            title: "Run the script?",
+            description: "Run the script?",
+            approvalType: "exec",
+            isLinkOnly: false)))
+      await agent.setResolveFails(true)
+      _ = await concierge.applyClientEffects(JsonArray([["kind": "approve"]]))
+      let state = await concierge.getState()
+      return expectEqual(state.pendingApprovalId, "a1", "pending approval kept")
+    },
+  ]
+}

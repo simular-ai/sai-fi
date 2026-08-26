@@ -301,7 +301,15 @@ public actor Concierge {
     let next = state.queue[index]
     state = state.removeQueued(index)
     // Its OWN attachments, never the bridge's current stash.
-    _ = try? await agent.forwardTask(text: next.text, attachments: next.attachments)
+    do {
+      _ = try await agent.forwardTask(text: next.text, attachments: next.attachments)
+    } catch {
+      // Same as applyForwardToAgent / applySendQueuedNow: startTurn after a failed write parks
+      // the FSM in `working` with nothing following the turn.
+      log("forwardTask failed: \(error)")
+      await voice.say(text: COULD_NOT_START_TASK, supersedes: nil)
+      return
+    }
     state = state.startTurn(next.text)
   }
 

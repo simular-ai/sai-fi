@@ -226,10 +226,10 @@ final class GlassesGestureSession {
       if p == nil {
         onLog("glasses: session started — temple button live")
       } else if p == .paused {
-        onTap() // tap → resume
+        onTap() // tap → unmute (DAT still toggles PAUSED⇄STARTED; we treat that as mute)
       }
     case .paused:
-      onTap() // tap → pause
+      onTap() // tap → mute
     case .stopped:
       onStop() // tap-and-hold / doff / fold
     default:

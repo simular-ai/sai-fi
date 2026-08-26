@@ -59,7 +59,15 @@ final class AppModel {
   /// Home without Firebase. `refreshAuthState` must not wipe this.
   @ObservationIgnored private var authBypass = false
   #endif
-  /// DEBUG: Home without Firebase. `refreshAuthState` must not wipe this.
+
+  /// True after DEBUG "Continue without account" — Settings must not claim Google.
+  var signedInWithoutAccount: Bool {
+    #if DEBUG
+    authBypass
+    #else
+    false
+    #endif
+  }
 
   var authError: String? = nil
   var authErrorOpen: Bool = false
@@ -340,7 +348,8 @@ final class AppModel {
           machineLabel: m.label,
           machines: machines,
           useGlasses: useGlasses,
-          askFirstThresholdMs: Int64(commitAskFirstSec()) * 1000))
+          askFirstThresholdMs: Int64(commitAskFirstSec()) * 1000),
+        wearables: dat)
     }
   }
 

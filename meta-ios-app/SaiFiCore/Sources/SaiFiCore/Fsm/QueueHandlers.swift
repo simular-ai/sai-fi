@@ -48,7 +48,16 @@ extension Concierge {
     // interruptScopeAsked deliberately — the escalated task joins the running turn, so the next
     // interrupt must find two requests again rather than aborting the newly-added one without asking.
     state = state.removeQueued(index)
-    _ = try? await agent.forwardTask(text: item.text, attachments: item.attachments)
+    do {
+      _ = try await agent.forwardTask(text: item.text, attachments: item.attachments)
+    } catch {
+      // Swallowing then startTurn left the FSM in `working` with no agent turn — admission held
+      // every later task behind work that could not finish. Android lets this throw, which skips
+      // startTurn; say the same line the immediate path uses so the user hears it failed.
+      log("forwardTask failed: \(error)")
+      await voice.say(text: COULD_NOT_START_TASK, supersedes: nil)
+      return
+    }
     state = state.startTurn(item.text)
     await voice.say(text: startingNowLine([item.text]), supersedes: QUEUE_POSITION)
   }

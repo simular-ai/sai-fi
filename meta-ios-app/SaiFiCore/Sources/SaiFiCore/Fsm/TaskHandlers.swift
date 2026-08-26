@@ -61,7 +61,14 @@ extension Concierge {
   /// new work, and holding it until the turn ends would answer a question after the thing that asked
   /// it.
   func applyRelayToAgent(answer: String) async {
-    try? await agent.steer(text: answer)
+    do {
+      try await agent.steer(text: answer)
+    } catch {
+      // Android lets this throw, which skips the approval-clear and mode change. A swallowed
+      // failure here would resolve a card the agent never heard the answer to.
+      log("steer failed: \(error)")
+      return
+    }
 
     if relayResolvesApproval() {
       let id = state.pendingApprovalId!
