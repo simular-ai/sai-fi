@@ -204,7 +204,7 @@ final class GlassesGestureSession {
     }
   }
 
-  isolated deinit {
+  deinit {
     deviceMonitorTask?.cancel()
     stateTask?.cancel()
     errorTask?.cancel()
